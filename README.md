@@ -34,3 +34,7 @@ IF YOU FIND ANY CRASHES PLEASE MAKE AN ISSUE EXPLAINING WHERE IT WAS AND WHAT YO
 CREDITS
 MadLadMikael - for helping setup and teaching howto use REXGLUESDK and GITHUB
 
+
+DISCLAIMER: Please support the official repop release. while it may be controversial and this may be the alternative you may prefer they worked hard to bring you new content in there as well.
+
+RE-CHERRY AND ITS DEVELOPERS DOES NOT CONDONE PIRACY.
