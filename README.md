@@ -16,7 +16,7 @@ open the folder in visual studio, go into cmake targets view
 <br>
 change the configuration to win-amd64-relwithdebinfo
 <br>
-put rexglue.exe in your path environment variable and do rexglue codegen redahm_config.toml in a terminal (visual studios works, or you can use windows default terminal/cmd/powershell)
+put rexglue.exe in your path environment variable and do rexglue codegen re_cherry_config.toml in a terminal (visual studios works, or you can use windows default terminal/cmd/powershell)
 <br>
 right click re_cherry project and select build all
 <br>
@@ -24,7 +24,7 @@ copy the assets folder with the dumped contents of the iso in out/build/win-amd6
 
 HOW TO USE
 ----------------------------------
-for the time being until a launcher is completed all you must do is download the repo and go into out/build/win-amd64-relwithdebinfo and either put the assets folder with the dumped assets, redahm.toml, and the default.xex in it or make a new folder somewhere and place the assets with the default.xex in there the only folder/files you should have are the kronosgame folder with its files and the default.xex
+for the time being until a launcher is completed all you must do is download the repo and go into out/build/win-amd64-relwithdebinfo and either put the assets folder with the dumped assets,and the default.xex in it or make a new folder somewhere and place the assets with the default.xex in there the only folder/files you should have are the ashgame folder with its files and the default.xex
 
 CURRENT ISSUES WITH THE GAME
 --------------------------------------
