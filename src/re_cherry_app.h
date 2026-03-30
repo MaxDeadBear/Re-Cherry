@@ -7,6 +7,7 @@
 #pragma once
 
 #include <rex/rex_app.h>
+#include "costume_switcher.h"
 
 class ReCherryApp : public rex::ReXApp {
  public:
@@ -18,11 +19,7 @@ class ReCherryApp : public rex::ReXApp {
         PPCImageConfig));
   }
 
-  // Override virtual hooks for customization:
-  // void OnPreSetup(rex::RuntimeConfig& config) override {}
-  // void OnLoadXexImage(std::string& xex_image) override {}
-  // void OnPostSetup() override {}
-  // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
-  // void OnShutdown() override {}
-  // void OnConfigurePaths(rex::PathConfig& paths) override {}
+  void OnPostSetup() {
+    InitCostumeManager(game_data_root() / "AshGame" / "CookedXbox360");
+  }
 };

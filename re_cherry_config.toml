@@ -59,4 +59,10 @@ after_instruction = false
 address = 0x829EAA08
 name = "fps1"
 registers = ["r11"]
-after_instruction = false
+after_instruction = true
+
+[[midasm_hook]]
+address = 0x824A1EF0
+name = "fps2"
+registers = ["r11"]
+after_instruction = true
