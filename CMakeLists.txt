@@ -16,6 +16,7 @@ include(generated/rexglue.cmake)
 set(RECHERRY_SOURCES
     src/main.cpp
     src/hooks.cpp
+    src/costume_switcher.cpp
 )
 
 if(WIN32)
