@@ -19,14 +19,9 @@ class ReCherryApp : public rex::ReXApp {
         PPCImageConfig));
   }
 
-  void OnPostSetup() override {
-    InitCostumeManager(game_data_root() / "AshGame" / "CookedXbox360");
+  void OnPostSetup() {
+    InitCostumeManager(
+        game_data_root() / "AshGame" / "CookedXbox360",
+        game_data_root() / "SkinMods");
   }
-
-  // Override virtual hooks for customization:
-  // void OnPreSetup(rex::RuntimeConfig& config) override {}
-  // void OnLoadXexImage(std::string& xex_image) override {}
-  // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
-  // void OnShutdown() override {}
-  // void OnConfigurePaths(rex::PathConfig& paths) override {}
 };

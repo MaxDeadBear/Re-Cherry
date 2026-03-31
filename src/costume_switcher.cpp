@@ -45,9 +45,13 @@ COSTUME_CVAR(24);
 
 namespace fs = std::filesystem;
 
-static void ApplyCostumeOverride(int dest, int src, const fs::path& dir) {
-    auto dest_file = dir / std::format("costume{:02d}.xxx", dest);
-    auto backup    = dir / std::format("costume{:02d}.xxx.bak", dest);
+// src_file is resolved from skin_mods_dir (never touched by UE3).
+// dest_file and its backup live in cooked_dir (what the game reads).
+static void ApplyCostumeOverride(int dest, int src,
+                                 const fs::path& cooked_dir,
+                                 const fs::path& skin_mods_dir) {
+    auto dest_file = cooked_dir  / std::format("costume{:02d}.xxx", dest);
+    auto backup    = cooked_dir  / std::format("costume{:02d}.xxx.bak", dest);
     std::error_code ec;
 
     if (src == -1) {
@@ -56,15 +60,25 @@ static void ApplyCostumeOverride(int dest, int src, const fs::path& dir) {
             return;
         }
         fs::copy_file(backup, dest_file, fs::copy_options::overwrite_existing, ec);
-        if (ec) REXLOG_WARN("[costumes] costume{:02d}: restore failed: {}", dest, ec.message());
-        else    REXLOG_INFO("[costumes] costume{:02d}: restored original", dest);
+        if (ec) { REXLOG_WARN("[costumes] costume{:02d}: restore failed: {}", dest, ec.message()); return; }
+        REXLOG_INFO("[costumes] costume{:02d}: restored original", dest);
+        fs::remove(backup, ec);
+        if (ec) REXLOG_WARN("[costumes] costume{:02d}: failed to delete backup: {}", dest, ec.message());
         return;
     }
 
-    auto src_file = dir / std::format("costume{:02d}.xxx", src);
-    if (!fs::exists(src_file)) {
-        REXLOG_WARN("[costumes] costume{:02d}: source costume{:02d}.xxx not found", dest, src);
-        return;
+    // Look for the source in SkinMods first, fall back to CookedXbox360.
+    auto src_file = skin_mods_dir / std::format("costume{:02d}.xxx", src);
+    if (fs::exists(src_file)) {
+        REXLOG_INFO("[costumes] costume{:02d}: source {:02d} found in SkinMods ({})", dest, src, src_file.string());
+    } else {
+        src_file = cooked_dir / std::format("costume{:02d}.xxx", src);
+        if (!fs::exists(src_file)) {
+            REXLOG_WARN("[costumes] costume{:02d}: source costume{:02d}.xxx not found in SkinMods ({}) or CookedXbox360",
+                        dest, src, (skin_mods_dir / std::format("costume{:02d}.xxx", src)).string());
+            return;
+        }
+        REXLOG_INFO("[costumes] costume{:02d}: source {:02d} found in CookedXbox360", dest, src);
     }
 
     if (!fs::exists(backup)) {
@@ -77,16 +91,17 @@ static void ApplyCostumeOverride(int dest, int src, const fs::path& dir) {
     else    REXLOG_INFO("[costumes] costume{:02d}: applied source {:02d}", dest, src);
 }
 
-void InitCostumeManager(const fs::path& cooked_dir) {
+void InitCostumeManager(const fs::path& cooked_dir,
+                        const fs::path& skin_mods_dir) {
     for (int i = 0; i <= 24; ++i) {
         std::string cvar_name = std::format("costume_slot_{:02d}", i);
 
         // Register callback for future changes via the settings overlay
         rex::cvar::RegisterChangeCallback(cvar_name,
-            [i, cooked_dir](std::string_view, std::string_view new_val) {
+            [i, cooked_dir, skin_mods_dir](std::string_view, std::string_view new_val) {
                 int src = -1;
                 std::from_chars(new_val.data(), new_val.data() + new_val.size(), src);
-                ApplyCostumeOverride(i, src, cooked_dir);
+                ApplyCostumeOverride(i, src, cooked_dir, skin_mods_dir);
             });
 
         // Apply any value already set (e.g. loaded from config on startup)
@@ -94,7 +109,7 @@ void InitCostumeManager(const fs::path& cooked_dir) {
         int src = -1;
         std::from_chars(cur.data(), cur.data() + cur.size(), src);
         if (src != -1) {
-            ApplyCostumeOverride(i, src, cooked_dir);
+            ApplyCostumeOverride(i, src, cooked_dir, skin_mods_dir);
         }
     }
 }
