@@ -8,6 +8,7 @@
 
 #include <rex/rex_app.h>
 #include "costume_switcher.h"
+#include "counter.h"
 
 class ReCherryApp : public rex::ReXApp {
  public:
@@ -17,6 +18,10 @@ class ReCherryApp : public rex::ReXApp {
       rex::ui::WindowedAppContext& ctx) {
     return std::unique_ptr<ReCherryApp>(new ReCherryApp(ctx, "re_cherry",
         PPCImageConfig));
+  }
+
+  void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+      drawer->AddDialog(new FpsOverlayDialog(drawer));
   }
 
   void OnPostSetup() {

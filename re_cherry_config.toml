@@ -9,60 +9,54 @@ setjmp_address  = 0x82BD89D0
 longjmp_address = 0x82BD8590
 
 [functions]
-0x82D218A8 = {}  # ctx.ctr.u32[0]
-0x82C0FF10 = {}  # ctx.ctr.u32[0]
-0x828BE3C0 = {}  # ctx.ctr.u32[0]
-0x82B063A8 = {}  # ctx.ctr.u32[0]
-0x82832530 = {}  # ctx.ctr.u32[0]
-0x82DCE748 = {}  # ctx.ctr.u32[0]
-0x8288C2F0 = {}  # ctx.ctr.u32[0]
-0x82305038 = {}  # ctx.ctr.u32[0]
-0x8244B068 = {}  # ctx.ctr.u32[0]
-0x82AA17D0 = {}  # ctx.ctr.u32[0]
-0x824366E0 = {}  # ctx.ctr.u32[0]
-0x826616F0 = {}  # ctx.ctr.u32[0]
-0x82DCE750 = {}  # ctx.ctr.u32[0]
-0x82B751A0 = {}  # ctx.ctr.u32[0]
-0x82D00F78 = {}  # ctx.ctr.u32[0]
-0x8222F568 = {}  # ctx.ctr.u32[0]
-0x82D4AC30 = {}  # ctx.ctr.u32[0]
-0x82CE67B0 = {}  # ctx.ctr.u32[0]
-0x82B062E8 = {}  # ctx.ctr.u32[0]
-0x82B063C0 = {}  # ctx.ctr.u32[0]
-0x82B644F0 = {}  # ctx.ctr.u32[0]
-0x8227A568 = {}  # ctx.ctr.u32[0]
-0x82D015C0 = {}  # ctx.ctr.u32[0]
-0x82DCE758 = {}  # ctx.ctr.u32[0]
-0x82C587B8 = {}  # ctx.ctr.u32[0]
-0x82A14D50 = {}  # ctx.ctr.u32[0]
-0x82A20810 = {}  # ctx.ctr.u32[0]
-0x8226B778 = {}  # ctx.ctr.u32[0]
-0x82A1BB18 = {}  # ctx.ctr.u32[0]
-0x82488B88 = {}  # ctx.ctr.u32[0]
-0x82A7E110 = {}  # ctx.ctr.u32[0]
-0x82C27CA0 = {}  # ctx.ctr.u32[0]
-0x82C0FFA8 = {}  # ctx.ctr.u32[0]
-0x82439528 = {}  # ctx.ctr.u32[0]
-0x82282770 = {}  # ctx.ctr.u32[0]
-0x82A1A728 = {}  # ctx.ctr.u32[0]
-0x82A3EC70 = {}  # ctx.ctr.u32[0]
-0x82CBEC90 = {}
-0x82CA8D30 = {}
+0x82D218A8 = {}  # GetField_0x128 — return *(this + 0x128)
+0x82C0FF10 = {}  # InputRingBuf_AllocH — align size, check wrap flags, alloc in horizontal ring buffer
+0x828BE3C0 = {}  # vtable adjuster thunk (this -= 0x90)
+0x82B063A8 = {}  # vtable thunk — dispatch vtable slot 0x3C via this->0x1C->0xC
+0x82832530 = {}  # thunk → sub_82832538 (saves gpr28, larger function)
+0x82DCE748 = {}  # getter thunk — return *(this + 0x38), then branch
+0x8288C2F0 = {}  # vtable dispatch through *(this + 0x58)
+0x82305038 = {}  # if (a2 >= 0) call sub_82390790
+0x8244B068 = {}  # sub_8244B068 (0x1c bytes, unanalyzed)
+0x82AA17D0 = {}  # vtable thunk — dispatch through this->0x24->0x10->vtable
+0x824366E0 = {}  # vtable adjuster thunk (this -= 0x44)
+0x826616F0 = {}  # SyncCachedFloats — copy result[64]→result[66], load global float into result[65]
+0x82DCE750 = {}  # getter thunk — return *(this + 0x38), branch to loc_82DE7980
+0x82B751A0 = {}  # SetButtonFlag — set bit 1 or 0 in *(this + 0x150) based on a2 & 0x100
+0x82D00F78 = {}  # vtable adjuster thunk (this += 0x304)
+0x8222F568 = {}  # GetSignBit_0x1EC — return *(this + 0x1EC) >> 31
+0x82D4AC30 = {}  # GetFloats_0x30_0x34 — out: *a2=*(this+0x30), *a3=*(this+0x34)
+0x82CE67B0 = {}  # Set_0x24_0x8 — *(this+0x24) = *(this+0x8) = a2
+0x82B062E8 = {}  # GetFloat_DeepPtr — return float at this->0x1C->0xC->0x20[0x40]
+0x82B063C0 = {}  # GetAlignedPtr_DeepPtr — return (this->0x1C->0xC->0x20->0x24 & ~3) + 8
+0x82B644F0 = {}  # MatchesEntry — deep struct equality (type, flags, float, per-entry arrays)
+0x8227A568 = {}  # Script_Step — read next bytecode byte from *(a2+0x18), dispatch via jump table
+0x82D015C0 = {}  # SetField_Indirect — *(*(this+0x174) + 0x90) = a2
+0x82DCE758 = {}  # GetField_0x34 — return *(this + 0x34)
+0x82C587B8 = {}  # Manager_Notify — if (a1) call global manager vtable[5](global, a1)
+0x82A14D50 = {}  # ComputeCount_AllocA — count fields (+0x4C/+0xA8/+0x58 chain/+0xAC), call vtable[7] (tag 0x1337F001)
+0x82A20810 = {}  # vtable dispatch through this->0x48->0x40->vtable[5]
+0x8226B778 = {}  # Script_Dispatch — call func ptr from global table with *(a2+0x14)
+0x82A1BB18 = {}  # ComputeCount_AllocB — count with bone/child chain fields, call vtable[7] (tag 0x1337F001)
+0x82488B88 = {}  # sub_82488B88 (0x70 bytes, unanalyzed)
+0x82A7E110 = {}  # DecrementCounter_Notify — *(this+0xB0) -= a3, then vtable[5](this->0xA4)
+0x82C27CA0 = {}  # UpdateGlobalValueSet — write 3 values to globals, update array at global index
+0x82C0FFA8 = {}  # InputRingBuf_AllocXY — check key code (0x81-0x84/0x121), alloc in X or Y ring buffer
+0x82439528 = {}  # Init_SetVtable — if (this) set vtable ptr, clear field[35]
+0x82282770 = {}  # Init_SetVtablePtrs — if (this) set 3 vtable pointers
+0x82A1A728 = {}  # ComputeCount_AllocC — count starting 1 or 2 based on +0xB8, call vtable[7] (tag 0x1337F001)
+0x82A3EC70 = {}  # GetField_0x18 — return *(this + 0x18)
+0x82CBEC90 = {}  # → sub_82CC35C0 (0x8 bytes)
+0x82CA8D30 = {}  # → sub_82CA8E18 (0x88 bytes)
 
 [[midasm_hook]]
-address = 0x8253A7D0
+address = 0x829EAA14
 name = "fps"
 registers = ["r11"]
 after_instruction = false
 
 [[midasm_hook]]
-address = 0x829EAA08
-name = "fps1"
-registers = ["r11"]
-after_instruction = true
-
-[[midasm_hook]]
-address = 0x824A1EF0
-name = "fps2"
-registers = ["r11"]
-after_instruction = true
+address = 0x829EBA3C 
+name = "counter"
+registers = []
+after_instruction = false
