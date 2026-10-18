@@ -5,6 +5,7 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -23,8 +24,6 @@
 
 namespace {
 
-// The memory file FGFxFileOpener::OpenFile returns for a movie in a package: data at +8, length at +12, the url's first 62 characters at +20.
-constexpr uint32_t kMemoryFileVtable = 0x8218A6E8;
 // GFxMovieView::SetExternalInterfaceRetVal(const GFxValue&), the slot FGFxExternalInterface::Callback returns an UnrealScript result through.
 constexpr uint32_t kSetExternalInterfaceRetValSlot = 200;
 constexpr uint32_t kGFxValueBoolean = 2;
@@ -36,20 +35,21 @@ constexpr uint16_t kTagEnd = 0;
 constexpr uint16_t kTagDoAction = 12;
 constexpr uint16_t kTagDefineSprite = 39;
 
-// The GRAPHICS rows in the order option_menu_graphics.as lists them, each with the cvar values its choices stand for.
+// The GRAPHICS rows in the order option_menu_graphics.as lists them, each with the cvar values its choices stand for; a row may set a second cvar with each choice too.
 struct Row {
   const char* cvar;
-  bool boolean;
   std::array<const char*, 7> values;
+  const char* cvar2 = nullptr;
+  std::array<const char*, 7> values2 = {};
 };
 constexpr Row kRows[] = {
-    {"cherry_gfx_render_height", false, {"0", "144", "360", "720", "1080", "1440", "2160"}},
-    {"cherry_gfx_fxaa", true, {"false", "true"}},
-    {"cherry_gfx_anisotropy", false, {"0", "2", "4", "8", "16"}},
-    {"cherry_gfx_stretch", true, {"false", "true"}},
-    {"fullscreen", true, {"false", "true"}},
-    {"cherry_gfx_vsync", true, {"false", "true"}},
-    {"target_fps", false, {"30", "60", "0"}},
+    {"cherry_gfx_render_height", {"0", "144", "360", "720", "1080", "1440", "2160"}},
+    {"cherry_gfx_fxaa", {"false", "true"}},
+    {"cherry_gfx_anisotropy", {"0", "2", "4", "8", "16"}},
+    {"cherry_gfx_stretch", {"false", "true", "false", "false"}, "cherry_gfx_ultrawide", {"0", "0", "21", "32"}},
+    {"fullscreen", {"false", "true"}},
+    {"cherry_gfx_vsync", {"false", "true"}},
+    {"target_fps", {"30", "60", "0"}},
 };
 constexpr int kRowCount = int(std::size(kRows));
 
@@ -58,9 +58,6 @@ struct State {
   std::filesystem::path config_path;
   std::function<void(std::function<void()>)> run_on_ui_thread;
   std::array<int, kRowCount> pending = {};
-  std::vector<uint8_t> original_movie;
-  uint32_t patched_address = 0;
-  uint32_t patched_size = 0;
 };
 
 State& state() {
@@ -72,12 +69,31 @@ int ChoiceCount(const Row& row) {
   return int(std::count_if(row.values.begin(), row.values.end(), [](const char* v) { return v != nullptr; }));
 }
 
-int IndexOf(const Row& row, const std::string& value) {
-  if (row.boolean) return value == "true" || value == "1" ? 1 : 0;
+// Whether a cvar's value is this choice's, comparing booleans and numbers by meaning rather than spelling.
+bool Matches(const char* cvar, const std::string& value, const char* choice) {
+  const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(cvar);
+  if (info && info->type == rex::cvar::FlagType::Boolean) return (value == "true" || value == "1") == (std::string_view(choice) == "true");
+  return std::atoi(value.c_str()) == std::atoi(choice);
+}
+
+// The first choice both of whose cvars hold its values, from `value_of` (the live value or the default); 0 when none does.
+template <typename ValueOf>
+int ChoiceOf(const Row& row, ValueOf value_of) {
   for (int i = 0; i < ChoiceCount(row); ++i) {
-    if (std::atoi(row.values[i]) == std::atoi(value.c_str())) return i;
+    if (Matches(row.cvar, value_of(row.cvar), row.values[i]) && (!row.cvar2 || Matches(row.cvar2, value_of(row.cvar2), row.values2[i]))) return i;
   }
   return 0;
+}
+
+int CurrentChoice(const Row& row) {
+  return ChoiceOf(row, [](const char* cvar) { return rex::cvar::GetFlagByName(cvar); });
+}
+
+int DefaultChoice(const Row& row) {
+  return ChoiceOf(row, [](const char* cvar) {
+    const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(cvar);
+    return info ? info->default_value : std::string();
+  });
 }
 
 struct TagHeader {
@@ -108,8 +124,11 @@ bool Contains(const uint8_t* data, size_t size, std::string_view text) {
   return std::search(data, data + size, text.begin(), text.end()) != data + size;
 }
 
-// Inserts the GRAPHICS page's DoAction after the controller sprite's own, the DoAction that defines AllOptionSetting; empty when the movie is not the options screen.
-std::vector<uint8_t> PatchMovie(const std::vector<uint8_t>& movie) {
+}  // namespace
+
+namespace cherry::ui {
+
+std::vector<uint8_t> AddGraphicsPage(const std::vector<uint8_t>& movie) {
   if (movie.size() < 9 || std::memcmp(movie.data(), "GFX", 3) != 0) return {};
   const uint32_t rect_bits = 5 + 4 * (movie[8] >> 3);
   size_t pos = 8 + (rect_bits + 7) / 8 + 4;
@@ -140,33 +159,9 @@ std::vector<uint8_t> PatchMovie(const std::vector<uint8_t>& movie) {
   return {};
 }
 
-void SwapOptionMenuMovie(uint8_t* base, uint32_t file) {
-  const uint32_t data = REX_LOAD_U32(file + 8);
-  const uint32_t size = REX_LOAD_U32(file + 12);
-  const uint8_t* bytes = base + data;
-  if (!data || size < 9 || std::memcmp(bytes, "GFX", 3) != 0) return;
-  State& s = state();
-  std::lock_guard lock(s.mutex);
-  const bool known = s.patched_address && s.original_movie.size() == size && std::memcmp(s.original_movie.data(), bytes, size) == 0;
-  if (!known) {
-    if (!Contains(bytes, size, kControllerMarker)) return;
-    std::vector<uint8_t> original(bytes, bytes + size);
-    const std::vector<uint8_t> patched = PatchMovie(original);
-    if (patched.empty()) {
-      REXLOG_WARN("[ui] the options screen movie has no controller to add the GRAPHICS page to");
-      return;
-    }
-    const uint32_t address = rex::system::kernel_state()->memory()->SystemHeapAlloc(uint32_t(patched.size()));
-    if (!address) return;
-    std::memcpy(base + address, patched.data(), patched.size());
-    s.original_movie = std::move(original);
-    s.patched_address = address;
-    s.patched_size = uint32_t(patched.size());
-    REXLOG_INFO("[ui] options screen movie patched with the GRAPHICS page ({} -> {} bytes)", size, s.patched_size);
-  }
-  REX_STORE_U32(file + 8, s.patched_address);
-  REX_STORE_U32(file + 12, s.patched_size);
-}
+}  // namespace cherry::ui
+
+namespace {
 
 double NumberArg(uint8_t* base, uint32_t args, uint32_t count, uint32_t index) {
   if (index >= count) return 0.0;
@@ -191,6 +186,27 @@ void ReturnNumber(PPCContext& ctx, uint8_t* base, uint32_t movie, double number)
   ctx.r1.u32 = sp;
 }
 
+// Writes just these cvars into the config file, keeping its other lines; the SDK's SaveConfig would also persist whatever the command line set, debug flags included.
+void SaveCvars(const std::filesystem::path& path, const std::vector<std::string_view>& names) {
+  std::vector<std::string> lines;
+  if (std::ifstream in(path); in) {
+    for (std::string line; std::getline(in, line);) lines.push_back(line);
+  }
+  if (lines.empty()) lines.push_back("# Auto-generated cvar configuration");
+  for (std::string_view name : names) {
+    const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(name);
+    if (!info) continue;
+    std::string value = rex::cvar::GetFlagByName(name);
+    if (info->type == rex::cvar::FlagType::String) value = "\"" + value + "\"";
+    const std::string entry = std::string(name) + " = " + value;
+    auto match = std::find_if(lines.begin(), lines.end(), [&](const std::string& line) { return line.starts_with(std::string(name) + " ") || line.starts_with(std::string(name) + "="); });
+    if (match != lines.end()) *match = entry;
+    else lines.push_back(entry);
+  }
+  std::ofstream out(path, std::ios::trunc);
+  for (const std::string& line : lines) out << line << '\n';
+}
+
 // Sets the staged choices on the UI thread, as the settings overlay does, so they take effect at once; `save` also writes the config.
 void ApplyGraphics(bool save) {
   State& s = state();
@@ -201,10 +217,16 @@ void ApplyGraphics(bool save) {
     if (!s.run_on_ui_thread) return;
   }
   s.run_on_ui_thread([chosen, save] {
+    std::vector<std::string_view> names;
+    auto set = [&](const char* cvar, const char* value) {
+      if (!Matches(cvar, rex::cvar::GetFlagByName(cvar), value)) rex::cvar::SetFlagByName(cvar, value);
+      names.push_back(cvar);
+    };
     for (int i = 0; i < kRowCount; ++i) {
-      if (rex::cvar::GetFlagByName(kRows[i].cvar) != kRows[i].values[chosen[i]]) rex::cvar::SetFlagByName(kRows[i].cvar, kRows[i].values[chosen[i]]);
+      set(kRows[i].cvar, kRows[i].values[chosen[i]]);
+      if (kRows[i].cvar2) set(kRows[i].cvar2, kRows[i].values2[chosen[i]]);
     }
-    if (save) rex::cvar::SaveConfig(state().config_path);
+    if (save) SaveCvars(state().config_path, names);
   });
 }
 
@@ -215,10 +237,9 @@ void HandleCall(PPCContext& ctx, uint8_t* base, std::string_view call) {
   const int row = int(NumberArg(base, args, count, 0));
   const bool valid = row >= 0 && row < kRowCount;
   if (call == "Get" && valid) {
-    ReturnNumber(ctx, base, movie, IndexOf(kRows[row], rex::cvar::GetFlagByName(kRows[row].cvar)));
+    ReturnNumber(ctx, base, movie, CurrentChoice(kRows[row]));
   } else if (call == "Default" && valid) {
-    const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(kRows[row].cvar);
-    ReturnNumber(ctx, base, movie, info ? IndexOf(kRows[row], info->default_value) : 0);
+    ReturnNumber(ctx, base, movie, DefaultChoice(kRows[row]));
   } else if (call == "Set" && valid) {
     const int choice = int(NumberArg(base, args, count, 1));
     {
@@ -232,7 +253,7 @@ void HandleCall(PPCContext& ctx, uint8_t* base, std::string_view call) {
     std::lock_guard lock(state().mutex);
     if (state().run_on_ui_thread) state().run_on_ui_thread([] {
       rex::cvar::SetFlagByName("cherry_fps_counter", rex::cvar::Query<bool>("cherry_fps_counter") ? "false" : "true");
-      rex::cvar::SaveConfig(state().config_path);
+      SaveCvars(state().config_path, {std::string_view("cherry_fps_counter")});
     });
   }
 }
@@ -246,17 +267,10 @@ void InitOptionMenu(const std::filesystem::path& config_path, std::function<void
   std::lock_guard lock(s.mutex);
   s.config_path = config_path;
   s.run_on_ui_thread = std::move(run_on_ui_thread);
-  for (int i = 0; i < kRowCount; ++i) s.pending[i] = IndexOf(kRows[i], rex::cvar::GetFlagByName(kRows[i].cvar));
+  for (int i = 0; i < kRowCount; ++i) s.pending[i] = CurrentChoice(kRows[i]);
 }
 
 }  // namespace cherry::ui
-
-// FGFxFileOpener::OpenFile(this, url)
-REX_HOOK_RAW(sub_82932070) {
-  __imp__sub_82932070(ctx, base);
-  const uint32_t file = ctx.r3.u32;
-  if (file && REX_LOAD_U32(file) == kMemoryFileVtable) SwapOptionMenuMovie(base, file);
-}
 
 // FGFxExternalInterface::Callback(this, movie_view, method_name, args, arg_count)
 REX_HOOK_RAW(sub_829339B0) {

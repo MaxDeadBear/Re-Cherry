@@ -31,7 +31,7 @@ Investigation switches in `src/gpu/debug/`:
 
 ## `--cherry_debug_press=frame:button[+button],...`
 
-Presses buttons on pad 0 at given presented frames, each held for 6 frames (`src/engine/debug/scripted_input.cpp`), so a run can get past the title without a controller: `--cherry_debug_press=1000:start,1300:a`. While it is set, pad 0 reads as connected even with no controller.
+Presses buttons on pad 0 at given presented frames, each held for 6 frames (`src/engine/debug/scripted_input.cpp`), so a run can get past the title without a controller: `--cherry_debug_press=1000:start,1300:a`. While it is set, pad 0 reads as connected even with no controller, and the run uses a copy of the saves and config in `<user data>_scripted` (`src/app/debug/scripted_run.cpp`), refreshed at every start, so the game's autosaves and any menu presses never reach the player's own. `--cherry_debug_fps_at=frame:fps` switches `target_fps` at that frame, to navigate at a fixed rate and then measure another.
 
 ## `--cherry_debug_profile_frame=N`
 

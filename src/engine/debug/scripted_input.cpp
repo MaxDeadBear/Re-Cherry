@@ -10,6 +10,8 @@
 
 #include "engine/frame_rate.h"
 
+REXCVAR_DEFINE_STRING(cherry_debug_fps_at, "", "Lollipop/Debug", "With cherry_debug_press, sets target_fps once the given presented frame is reached, as frame:fps, so a run can navigate at a fixed rate and then measure another (0 is uncapped).");
+REXCVAR_DECLARE(int32_t, target_fps);
 REXCVAR_DEFINE_STRING(cherry_debug_press, "", "Lollipop/Debug", "Buttons pad 0 presses at given presented frames, as frame:button[+button],... (start, back, a, b, x, y, up, down, left, right, lb, rb); each is held for 6 frames. Empty is off.");
 
 namespace cherry::engine::debug {
@@ -64,6 +66,19 @@ bool ScriptedPadActive() {
 
 uint16_t ScriptedButtons() {
   const uint64_t frame = PresentedFrames();
+  static bool fps_applied = false;
+  if (!fps_applied) {
+    const std::string at = REXCVAR_GET(cherry_debug_fps_at);
+    uint64_t at_frame = 0;
+    int32_t fps = 0;
+    const size_t colon = at.find(':');
+    if (colon == std::string::npos || std::from_chars(at.data(), at.data() + colon, at_frame).ec != std::errc() || std::from_chars(at.data() + colon + 1, at.data() + at.size(), fps).ec != std::errc()) {
+      fps_applied = true;
+    } else if (frame >= at_frame) {
+      REXCVAR_SET(target_fps, fps);
+      fps_applied = true;
+    }
+  }
   uint16_t buttons = 0;
   for (const Press& press : Script())
     if (frame >= press.frame && frame < press.frame + kHoldFrames) buttons |= press.buttons;

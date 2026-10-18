@@ -9,6 +9,7 @@
 
 #include "app/debug/hang_watchdog.h"
 #include "app/debug/sampling_profiler.h"
+#include "app/debug/scripted_run.h"
 #ifdef CHERRY_XENIA_COMPARE
 #include "compare/xenia/compare.h"
 #endif
@@ -24,6 +25,7 @@ ReCherryApp::~ReCherryApp() = default;
 
 void ReCherryApp::OnConfigurePaths(rex::PathConfig& paths) {
   namespace fs = std::filesystem;
+  cherry::app::debug::IsolateScriptedRun(paths);
   config_path_ = paths.config_path;
   constexpr const char* kEntryXexName = "default.xex";
   std::error_code ec;
@@ -76,6 +78,7 @@ void ReCherryApp::OnPostSetup() {
   cherry::app::StartHangWatchdog();
   cherry::app::debug::StartSamplingProfiler();
   cherry::gpu::SetShaderDumpDirectory(game_data_root().parent_path() / "shader_dump");
+  if (graphics_) graphics_->SetPipelineCachePath(config_path_.parent_path() / "pipelines.bin");
   cherry::engine::InitCostumes(game_data_root() / "AshGame" / "CookedXbox360", game_data_root() / "SkinMods");
   cherry::ui::InitOptionMenu(config_path_, [this](std::function<void()> fn) { app_context().CallInUIThreadDeferred(std::move(fn)); });
 }
