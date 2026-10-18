@@ -1,0 +1,1606 @@
+Re-Cherry patch for XenosRecomp (Lollipop Chainsaw, 0x102A11xx containers).
+
+Against hedge-dev/XenosRecomp 990d03b28a27b50277ee5d8d942e1c5f873869d1, the
+pinned thirdparty/XenosRecomp submodule. The submodule is left checked out at
+that commit WITH THIS PATCH APPLIED TO ITS WORKING TREE: the translator is built
+from it, and tools/shaders/build_shader_cache.py passes the patched
+thirdparty/XenosRecomp/XenosRecomp/shader_common.h to every translation. The
+game build itself only uses smol-v, xxHash and zstd from the submodule.
+
+  git -C thirdparty/XenosRecomp apply ../../tools/xenosrecomp/cherry.patch
+  cmake -S thirdparty/XenosRecomp -B out/xenosrecomp -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+  cmake --build out/xenosrecomp --target XenosRecomp
+
+Regenerate after editing the tree:
+  git -C thirdparty/XenosRecomp diff > tools/xenosrecomp/cherry.patch   (then re-add this header)
+
+What it contains and why: docs/renderer/shaders.md. Generic fixes ported from
+Kameo's kameo.patch; Kameo's v0x0E container adaptations are not.
+
+diff --git a/XenosRecomp/main.cpp b/XenosRecomp/main.cpp
+index d015145..8a77d92 100644
+--- a/XenosRecomp/main.cpp
++++ b/XenosRecomp/main.cpp
+@@ -21,12 +21,31 @@ static void writeAllBytes(const char* filePath, const void* data, size_t dataSiz
+     fclose(file);
+ }
+ 
++// Upstream's v0x11 (0x102A11xx) container test, shared by the directory batch
++// and --blobs so both discover exactly the same containers and hash them the
++// same way the runtime does: XXH3_64bits(container, virtualSize + physicalSize).
++static bool isShaderContainer(const uint8_t* data, size_t remaining)
++{
++    if (remaining < sizeof(ShaderContainer))
++        return false;
++
++    auto shaderContainer = reinterpret_cast<const ShaderContainer*>(data);
++    size_t dataSize = shaderContainer->virtualSize + shaderContainer->physicalSize;
++
++    return (shaderContainer->flags & 0xFFFFFF00) == 0x102A1100 &&
++        dataSize <= remaining &&
++        shaderContainer->field1C == 0 &&
++        shaderContainer->field20 == 0;
++}
++
+ struct RecompiledShader
+ {
+     uint8_t* data = nullptr;
+     IDxcBlob* dxil = nullptr;
+     std::vector<uint8_t> spirv;
+     uint32_t specConstantsMask = 0;
++    uint32_t textureDimensionMask = 0;
++    bool failed = false;
+ };
+ 
+ int main(int argc, char** argv)
+@@ -34,13 +53,13 @@ int main(int argc, char** argv)
+ #ifndef XENOS_RECOMP_INPUT
+     if (argc < 4)
+     {
+-        printf("Usage: XenosRecomp [input path] [output path] [shader common header file path]");
++        printf("Usage: XenosRecomp [input path] [output path] [shader common header file path] [--blobs]");
+         return 0;
+     }
+ #endif
+ 
+     const char* input =
+-#ifdef XENOS_RECOMP_INPUT 
++#ifdef XENOS_RECOMP_INPUT
+         XENOS_RECOMP_INPUT
+ #else
+         argv[1]
+@@ -48,13 +67,13 @@ int main(int argc, char** argv)
+     ;
+ 
+     const char* output =
+-#ifdef XENOS_RECOMP_OUTPUT 
++#ifdef XENOS_RECOMP_OUTPUT
+         XENOS_RECOMP_OUTPUT
+ #else
+         argv[2]
+ #endif
+         ;
+-    
++
+     const char* includeInput =
+ #ifdef XENOS_RECOMP_INCLUDE_INPUT
+         XENOS_RECOMP_INCLUDE_INPUT
+@@ -78,7 +97,7 @@ int main(int argc, char** argv)
+             {
+                 continue;
+             }
+-            
++
+             size_t fileSize = 0;
+             auto fileData = readAllBytes(file.path().string().c_str(), fileSize);
+             bool foundAny = false;
+@@ -88,10 +107,7 @@ int main(int argc, char** argv)
+                 auto shaderContainer = reinterpret_cast<const ShaderContainer*>(fileData.get() + i);
+                 size_t dataSize = shaderContainer->virtualSize + shaderContainer->physicalSize;
+ 
+-                if ((shaderContainer->flags & 0xFFFFFF00) == 0x102A1100 &&
+-                    dataSize <= (fileSize - i) &&
+-                    shaderContainer->field1C == 0 &&
+-                    shaderContainer->field20 == 0)
++                if (isShaderContainer(fileData.get() + i, fileSize - i))
+                 {
+                     XXH64_hash_t hash = XXH3_64bits(shaderContainer, dataSize);
+                     auto shader = shaders.try_emplace(hash);
+@@ -113,31 +129,55 @@ int main(int argc, char** argv)
+                 files.emplace_back(std::move(fileData));
+         }
+ 
+-        std::atomic<uint32_t> progress = 0;
++        uint32_t progress = 0;
++        uint32_t failedDxil = 0;
++        uint32_t failedSpirv = 0;
++
++        fmt::print(stderr, "Discovered {} shader containers.\n", shaders.size());
++        fflush(stderr);
+ 
+-        std::for_each(std::execution::par_unseq, shaders.begin(), shaders.end(), [&](auto& hashShaderPair)
++        // CHERRY: sequential, not par_unseq, and a failed compile is counted and
++        // skipped instead of asserting (in Release the assert vanished and the
++        // next line dereferenced a null blob). Driving DXC many times in one
++        // process is still not reliable; tools/shaders/build_shader_cache.py
++        // uses --blobs, one process per shader, instead of this batch.
++        std::for_each(std::execution::seq, shaders.begin(), shaders.end(), [&](auto& hashShaderPair)
+             {
+                 auto& shader = hashShaderPair.second;
+ 
+-                thread_local ShaderRecompiler recompiler;
+-                recompiler = {};
++                ShaderRecompiler recompiler;
+                 recompiler.recompile(shader.data, include);
+ 
+                 shader.specConstantsMask = recompiler.specConstantsMask;
++                shader.textureDimensionMask = recompiler.textureDimensionMask;
+ 
+                 thread_local DxcCompiler dxcCompiler;
+ 
+ #ifdef XENOS_RECOMP_DXIL
+-                shader.dxil = dxcCompiler.compile(recompiler.out, recompiler.isPixelShader, recompiler.specConstantsMask != 0, false);
+-                assert(shader.dxil != nullptr);
++                // CHERRY: never compile a library. shader_common.h defines g_SpecConstants()
++                // for DXIL, so a spec-constant mask no longer implies lib_6_3 -- see the
++                // comment there for why a library blob cannot reach a graphics PSO.
++                shader.dxil = dxcCompiler.compile(recompiler.out, recompiler.isPixelShader, false, false);
++                if (shader.dxil == nullptr)
++                {
++                    fmt::print(stderr, "FAILED dxil {:016X}\n", hashShaderPair.first);
++                    ++failedDxil;
++                    shader.failed = true;
++                    return;
++                }
+                 assert(*(reinterpret_cast<uint32_t *>(shader.dxil->GetBufferPointer()) + 1) != 0 && "DXIL was not signed properly!");
+ #endif
+ 
+                 IDxcBlob* spirv = dxcCompiler.compile(recompiler.out, recompiler.isPixelShader, false, true);
+-                assert(spirv != nullptr);
+-
+-                bool result = smolv::Encode(spirv->GetBufferPointer(), spirv->GetBufferSize(), shader.spirv, smolv::kEncodeFlagStripDebugInfo);
+-                assert(result);
++                if (spirv == nullptr || !smolv::Encode(spirv->GetBufferPointer(), spirv->GetBufferSize(), shader.spirv, smolv::kEncodeFlagStripDebugInfo))
++                {
++                    fmt::print(stderr, "FAILED spirv {:016X}\n", hashShaderPair.first);
++                    ++failedSpirv;
++                    shader.failed = true;
++                    if (spirv != nullptr)
++                        spirv->Release();
++                    return;
++                }
+ 
+                 spirv->Release();
+ 
+@@ -146,6 +186,14 @@ int main(int argc, char** argv)
+                     fmt::println("Recompiling shaders... {}%", currentProgress / float(shaders.size()) * 100.0f);
+             });
+ 
++        size_t succeeded = 0;
++        for (auto& [hash, shader] : shaders)
++            succeeded += shader.failed ? 0 : 1;
++
++        fmt::print(stderr, "discovered={} dxilFailed={} spirvFailed={} succeeded={}\n",
++            shaders.size(), failedDxil, failedSpirv, succeeded);
++        fflush(stderr);
++
+         fmt::println("Creating shader cache...");
+ 
+         StringBuffer f;
+@@ -157,15 +205,18 @@ int main(int argc, char** argv)
+ 
+         for (auto& [hash, shader] : shaders)
+         {
+-            f.println("\t{{ 0x{:X}, {}, {}, {}, {}, {} }},",
+-                hash, dxil.size(), (shader.dxil != nullptr) ? shader.dxil->GetBufferSize() : 0, spirv.size(), shader.spirv.size(), shader.specConstantsMask);
++            if (shader.failed)
++                continue;
++
++            f.println("\t{{ 0x{:X}, {}, {}, {}, {}, {}, {} }},",
++                hash, dxil.size(), (shader.dxil != nullptr) ? shader.dxil->GetBufferSize() : 0, spirv.size(), shader.spirv.size(), shader.specConstantsMask, shader.textureDimensionMask);
+ 
+             if (shader.dxil != nullptr)
+             {
+                 dxil.insert(dxil.end(), reinterpret_cast<uint8_t *>(shader.dxil->GetBufferPointer()),
+                     reinterpret_cast<uint8_t *>(shader.dxil->GetBufferPointer()) + shader.dxil->GetBufferSize());
+             }
+-            
++
+             spirv.insert(spirv.end(), shader.spirv.begin(), shader.spirv.end());
+         }
+ 
+@@ -203,16 +254,99 @@ int main(int argc, char** argv)
+ 
+         f.println("const size_t g_spirvCacheCompressedSize = {};", spirvCompressed.size());
+         f.println("const size_t g_spirvCacheDecompressedSize = {};", spirv.size());
+-        f.println("const size_t g_shaderCacheEntryCount = {};", shaders.size());
++        f.println("const size_t g_shaderCacheEntryCount = {};", succeeded);
+ 
+         writeAllBytes(output, f.out.data(), f.out.size());
++
++        return (failedDxil + failedSpirv) != 0 ? 1 : 0;
+     }
+     else
+     {
++        size_t fileSize = 0;
++        auto fileData = readAllBytes(input, fileSize);
++
++        // The first 0x102A11xx container in the file, by the same test the batch
++        // uses; a dumped <hash>.bin holds exactly one, at offset 0.
++        const uint8_t* containerData = nullptr;
++        for (size_t i = 0; i + sizeof(ShaderContainer) <= fileSize; i += sizeof(uint32_t))
++        {
++            if (isShaderContainer(fileData.get() + i, fileSize - i))
++            {
++                containerData = fileData.get() + i;
++                break;
++            }
++        }
++
++        if (containerData == nullptr)
++        {
++            fmt::print(stderr, "FAILED no 0x102A11xx shader container in {}\n", input);
++            return 1;
++        }
++
+         ShaderRecompiler recompiler;
+-        size_t fileSize;
+-        recompiler.recompile(readAllBytes(input, fileSize).get(), include);
++        recompiler.recompile(containerData, include);
++
++        // CHERRY: blob mode compiles this one container and writes its artefacts
++        // next to `output`, so a caller can drive one PROCESS PER SHADER and merge
++        // the results afterwards (DXC driven many times in one process corrupts
++        // the heap; see docs/renderer/shaders.md). The HLSL is written to
++        // `output` itself either way, so a failure can be inspected.
+         writeAllBytes(output, recompiler.out.data(), recompiler.out.size());
++
++        const bool blobMode = (argc >= 5) && (strcmp(argv[4], "--blobs") == 0);
++        if (!blobMode)
++            return 0;
++
++        const auto container = reinterpret_cast<const ShaderContainer*>(containerData);
++        const size_t dataSize = container->virtualSize + container->physicalSize;
++        const XXH64_hash_t hash = XXH3_64bits(container, dataSize);
++
++        DxcCompiler dxcCompiler;
++        std::string base(output);
++
++        size_t dxilSize = 0;
++#ifdef XENOS_RECOMP_DXIL
++        IDxcBlob* dxil = dxcCompiler.compile(recompiler.out, recompiler.isPixelShader, false, false); // CHERRY: never a library
++        if (dxil == nullptr)
++        {
++            fmt::print(stderr, "FAILED dxil {}\n", input);
++            return 1;
++        }
++        dxilSize = dxil->GetBufferSize();
++        writeAllBytes((base + ".dxil").c_str(), dxil->GetBufferPointer(), dxilSize);
++        dxil->Release();
++#endif
++
++        // hash dxilSize spirvSize specConstantsMask textureDimensionMask
++        auto writeMeta = [&](const char* suffix, size_t spirvSize)
++            {
++                std::string meta = fmt::format("{:016X} {} {} {} {}\n", hash, dxilSize, spirvSize, recompiler.specConstantsMask, recompiler.textureDimensionMask);
++                writeAllBytes((base + suffix).c_str(), meta.data(), meta.size());
++            };
++
++        // When only SPIR-V fails, the DXIL is still good: `<out>.dxil.meta` lets the caller keep it (with the real
++        // masks) instead of losing the shader on both backends. `<out>.meta` is written only on full success.
++        IDxcBlob* spirvBlob = dxcCompiler.compile(recompiler.out, recompiler.isPixelShader, false, true);
++        if (spirvBlob == nullptr)
++        {
++            if (dxilSize != 0)
++                writeMeta(".dxil.meta", 0);
++            fmt::print(stderr, "FAILED spirv {}\n", input);
++            return 1;
++        }
++
++        std::vector<uint8_t> spirv;
++        if (!smolv::Encode(spirvBlob->GetBufferPointer(), spirvBlob->GetBufferSize(), spirv, smolv::kEncodeFlagStripDebugInfo))
++        {
++            if (dxilSize != 0)
++                writeMeta(".dxil.meta", 0);
++            fmt::print(stderr, "FAILED smolv {}\n", input);
++            return 1;
++        }
++        spirvBlob->Release();
++
++        writeAllBytes((base + ".spirv").c_str(), spirv.data(), spirv.size());
++        writeMeta(".meta", spirv.size());
+     }
+ 
+     return 0;
+diff --git a/XenosRecomp/pch.h b/XenosRecomp/pch.h
+index e59682c..8c3540c 100644
+--- a/XenosRecomp/pch.h
++++ b/XenosRecomp/pch.h
+@@ -16,20 +16,33 @@
+ #include <fmt/core.h>
+ #include <string>
+ #include <unordered_map>
++#include <unordered_set>
+ #include <xxhash.h>
+ #include <zstd.h>
+ 
++// MSVC has no __builtin_bswap*; upstream only ever builds this with Clang.
++#if defined(_MSC_VER) && !defined(__clang__)
++#include <cstdlib>
++#define XENOS_BSWAP16(x) _byteswap_ushort(x)
++#define XENOS_BSWAP32(x) _byteswap_ulong(x)
++#define XENOS_BSWAP64(x) _byteswap_uint64(x)
++#else
++#define XENOS_BSWAP16(x) __builtin_bswap16(x)
++#define XENOS_BSWAP32(x) __builtin_bswap32(x)
++#define XENOS_BSWAP64(x) __builtin_bswap64(x)
++#endif
++
+ template<typename T>
+ static T byteSwap(T value)
+ {
+     if constexpr (sizeof(T) == 1)
+         return value;
+     else if constexpr (sizeof(T) == 2)
+-        return static_cast<T>(__builtin_bswap16(static_cast<uint16_t>(value)));
++        return static_cast<T>(XENOS_BSWAP16(static_cast<uint16_t>(value)));
+     else if constexpr (sizeof(T) == 4)
+-        return static_cast<T>(__builtin_bswap32(static_cast<uint32_t>(value)));
+-    else if constexpr (sizeof(T) == 8) 
+-        return static_cast<T>(__builtin_bswap64(static_cast<uint64_t>(value)));
++        return static_cast<T>(XENOS_BSWAP32(static_cast<uint32_t>(value)));
++    else if constexpr (sizeof(T) == 8)
++        return static_cast<T>(XENOS_BSWAP64(static_cast<uint64_t>(value)));
+ 
+     assert(false && "Unexpected byte size.");
+     return value;
+diff --git a/XenosRecomp/shader_common.h b/XenosRecomp/shader_common.h
+index 1c74034..98ef34d 100644
+--- a/XenosRecomp/shader_common.h
++++ b/XenosRecomp/shader_common.h
+@@ -3,6 +3,11 @@
+ 
+ #define SPEC_CONSTANT_R11G11B10_NORMAL  (1 << 0)
+ #define SPEC_CONSTANT_ALPHA_TEST        (1 << 1)
++// NORMAL/TANGENT/BINORMAL packed as DEC3N (Kameo), not as Unleashed's 11:11:10.
++#define SPEC_CONSTANT_DEC3N_NORMAL      (1 << 5)
++// CHERRY: not a spec constant but a flag for the host: the vertex shader fetches some element at an index it computed (vfetch with
++// an index register other than r0.x), so the draw's decoded vertices must also be in the vertex atlas (VFETCH_INDEXED below).
++#define SPEC_CONSTANT_INDEXED_VERTEX_FETCH (1 << 6)
+ 
+ #ifdef UNLEASHED_RECOMP
+     #define SPEC_CONSTANT_BICUBIC_GI_FILTER (1 << 2)
+@@ -30,6 +35,15 @@ struct PushConstants
+ #define g_SwappedTexcoords         vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 260)
+ #define g_HalfPixelOffset          vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + 264)
+ #define g_AlphaThreshold           vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 272)
++#define g_VertexAtlas              vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 276)
++#define g_VertexAtlasBase          vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 280)
++#define g_VertexElements           vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 284)
++#define g_VertexIndexBase          vk::RawBufferLoad<int>(g_PushConstants.SharedConstants + 288)
++#define g_ColorClamp               vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 292)
++#define g_DepthOffset              vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 296)
++#define g_InvResolutionScale       vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 300)
++#define g_ScaledTextures           vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 368)
++#define g_VertexSlotWord(i)        vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 304 + (i) * 4)
+ 
+ [[vk::constant_id(0)]] const uint g_SpecConstants = 0;
+ 
+@@ -41,9 +55,42 @@ struct PushConstants
+     uint g_Booleans : packoffset(c16.x); \
+     uint g_SwappedTexcoords : packoffset(c16.y); \
+     float2 g_HalfPixelOffset : packoffset(c16.z); \
+-    float g_AlphaThreshold : packoffset(c17.x);
+-
+-uint g_SpecConstants();
++    float g_AlphaThreshold : packoffset(c17.x); \
++    uint g_VertexAtlas : packoffset(c17.y); \
++    uint g_VertexAtlasBase : packoffset(c17.z); \
++    uint g_VertexElements : packoffset(c17.w); \
++    int g_VertexIndexBase : packoffset(c18.x); \
++    uint g_ColorClamp : packoffset(c18.y); \
++    float g_DepthOffset : packoffset(c18.z); \
++    float g_InvResolutionScale : packoffset(c18.w); \
++    uint4 g_VertexSlots[2] : packoffset(c19); \
++    uint g_ScaledTextures : packoffset(c23.x);
++
++#define g_VertexSlotWord(i) g_VertexSlots[(i) >> 2][(i) & 3]
++
++// CHERRY: a DEFINITION, not a declaration (DXIL only; SPIR-V keeps the
++// [[vk::constant_id(0)]] spec constant above).
++//
++// Upstream leaves this unresolved and compiles the shader as `lib_6_3` whenever
++// specConstantsMask != 0, so the host can supply the value when it links the
++// library into a state object. A `lib_6_3` blob cannot be put in a normal
++// graphics PSO -- D3D12 rejects it with "Shader version provided: UNRECOGNIZED"
++// -- and plume ignores the HRESULT. main.cpp therefore never compiles a library
++// and the value is fixed here for Lollipop Chainsaw:
++//
++//   *_NORMAL          gate decoding NORMAL/TANGENT/BINORMAL as packed fields
++//                     versus asfloat() on the raw bits. UE3's Xenon RHI maps
++//                     VET_PackedNormal to D3DDECLTYPE_UBYTE4 (0x001A2286, the
++//                     element-type switch in sub_829870E8), which is neither
++//                     DEC3N nor Unleashed's 11:11:10, so neither is set: the
++//                     host binds those elements with a float-producing format
++//                     (R8G8B8A8_USCALED) and asfloat() passes the value on.
++//   ALPHA_TEST        gates `clip(oC0.w - g_AlphaThreshold)`, always on: the
++//                     renderer folds the guest's alpha function into the
++//                     threshold and writes -1 when alpha testing is disabled.
++//
++// Baking makes every shader a plain vs_6_0 / ps_6_0. DXC folds the branches.
++uint g_SpecConstants() { return SPEC_CONSTANT_ALPHA_TEST; }
+ 
+ #endif
+ 
+@@ -52,6 +99,31 @@ Texture3D<float4> g_Texture3DDescriptorHeap[] : register(t0, space1);
+ TextureCube<float4> g_TextureCubeDescriptorHeap[] : register(t0, space2);
+ SamplerState g_SamplerDescriptorHeap[] : register(s0, space3);
+ 
++// CHERRY: Xenos starts a vertex shader with the vertex index in r0.x, and a vfetch reads the vertex its index register names.
++// The host decodes each draw's vertices to four 32-bit values per element; for a shader that fetches at a computed index they
++// also go to a 4096-wide R32G32B32A32 texture, the vertex atlas: g_VertexElements texels a vertex from g_VertexAtlasBase,
++// element slots by input location in g_VertexSlotWord, guest index g_VertexIndexBase at the atlas's first vertex.
++float4 vertexAtlasLoad(uint atlas, uint texel)
++{
++    return g_Texture2DDescriptorHeap[atlas].Load(int3(texel & 4095u, texel >> 12, 0));
++}
++
++// CHERRY: what writing a colour output to its EDRAM format does to it, two bits per render target in g_ColorClamp: 1 is a
++// 2_10_10_10 target, [0, 1]; 2 is 2_10_10_10_FLOAT (7e3: unsigned, at most 31.875, two-bit alpha). The host stands in for both
++// with 16-bit floats, which would keep negative and huge values for the blur and tonemap passes that read the target.
++float4 colorClamp(float4 value, uint mode)
++{
++    if (mode == 0)
++        return value;
++    value = select(isnan(value), 0.0, value);
++    if (mode == 2)
++        return float4(clamp(value.rgb, 0.0, 31.875), saturate(value.a));
++    return saturate(value);
++}
++
++#define VERTEX_SLOT(location) ((g_VertexSlotWord((location) >> 2) >> (((location) & 3) * 8)) & 0xFF)
++#define VFETCH_INDEXED(location, index, rounded) vertexAtlasLoad(g_VertexAtlas, g_VertexAtlasBase + uint(int((rounded) ? round(index) : floor(index)) - g_VertexIndexBase) * g_VertexElements + VERTEX_SLOT(location))
++
+ uint2 getTexture2DDimensions(Texture2D<float4> texture)
+ {
+     uint2 dimensions;
+@@ -59,16 +131,36 @@ uint2 getTexture2DDimensions(Texture2D<float4> texture)
+     return dimensions;
+ }
+ 
+-float4 tfetch2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset)
++// CHERRY: a vertex shader has no derivatives, and a Xenos vertex fetch computes no LOD, so it samples the base level.
++#if __SHADER_TARGET_STAGE == __SHADER_STAGE_VERTEX
++#define SAMPLE_2D(texture, samplerState, texCoord) texture.SampleLevel(samplerState, texCoord, 0)
++#else
++#define SAMPLE_2D(texture, samplerState, texCoord) texture.Sample(samplerState, texCoord)
++#endif
++
++// CHERRY: a texture the frame resolves out of a scaled render target is as many times bigger than the guest's, so fetch
++// offsets, unnormalised coordinates and fetch weights, which are in guest texels, are scaled by it. g_ScaledTextures
++// has a bit per pixel sampler whose texture is such a resolve, and that scale in 1/4096 units in bits 16..31; it is not
++// g_InvResolutionScale's, which is the scale of the target being drawn and can be 1 for a small data target.
++#define TEXEL_SCALE(slot) ((((g_ScaledTextures >> (slot)) & 1) != 0) ? float(g_ScaledTextures >> 16) / 4096.0 : 1.0)
++
++float4 tfetch2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset, float texelScale)
++{
++    Texture2D<float4> texture = g_Texture2DDescriptorHeap[resourceDescriptorIndex];
++    return SAMPLE_2D(texture, g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord + offset * texelScale / getTexture2DDimensions(texture));
++}
++
++// tfetch with UnnormalizedTextureCoords: the guest passes texel coordinates, not 0..1.
++float4 tfetch2DUnnorm(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset, float texelScale)
+ {
+     Texture2D<float4> texture = g_Texture2DDescriptorHeap[resourceDescriptorIndex];
+-    return texture.Sample(g_SamplerDescriptorHeap[samplerDescriptorIndex], texCoord + offset / getTexture2DDimensions(texture));
++    return SAMPLE_2D(texture, g_SamplerDescriptorHeap[samplerDescriptorIndex], (texCoord + offset) * texelScale / getTexture2DDimensions(texture));
+ }
+ 
+-float2 getWeights2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset)
++float2 getWeights2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset, float texelScale)
+ {
+     Texture2D<float4> texture = g_Texture2DDescriptorHeap[resourceDescriptorIndex];
+-    return select(isnan(texCoord), 0.0, frac(texCoord * getTexture2DDimensions(texture) + offset - 0.5));
++    return select(isnan(texCoord), 0.0, frac(texCoord * getTexture2DDimensions(texture) / texelScale + offset - 0.5));
+ }
+ 
+ float w0(float a)
+@@ -161,8 +253,18 @@ float4 tfetchCube(uint resourceDescriptorIndex, uint samplerDescriptorIndex, flo
+ 
+ float4 tfetchR11G11B10(uint4 value)
+ {
+-    if (g_SpecConstants() & SPEC_CONSTANT_R11G11B10_NORMAL)
++    if (g_SpecConstants() & SPEC_CONSTANT_DEC3N_NORMAL)
++    {
++        // DEC3N: three SIGNED 10-bit fields at bits 0..9, 10..19, 20..29,
++        // normalised by 511. Shifting left by 22 and back right by 22 on a
++        // SIGNED int both masks to 10 bits and sign-extends in one step, since
++        // HLSL's >> on int is arithmetic.
++        int3 f = int3(value.x << 22, value.x << 12, value.x << 2) >> 22;
++        return float4(float3(f) / 511.0, 1.0);
++    }
++    else if (g_SpecConstants() & SPEC_CONSTANT_R11G11B10_NORMAL)
+     {
++        // Unleashed's layout: 10+sign, 10+sign, 9+sign.
+         return float4(
+             (value.x & 0x00000400 ? -1.0 : 0.0) + ((value.x & 0x3FF) / 1024.0),
+             (value.x & 0x00200000 ? -1.0 : 0.0) + (((value.x >> 11) & 0x3FF) / 1024.0),
+diff --git a/XenosRecomp/shader_recompiler.cpp b/XenosRecomp/shader_recompiler.cpp
+index 698a418..74243a8 100644
+--- a/XenosRecomp/shader_recompiler.cpp
++++ b/XenosRecomp/shader_recompiler.cpp
+@@ -94,8 +94,23 @@ static constexpr DeclUsageLocation USAGE_LOCATIONS[] =
+     { DeclUsage::TexCoord, 6, 14 },
+     { DeclUsage::TexCoord, 7, 15 },
+     { DeclUsage::Position, 1, 15 },
++    // CHERRY: a TEXCOORD8 vertex input otherwise gets no [[vk::location]] while every
++    // sibling gets one, and DXC rejects the whole SPIR-V shader: "partial explicit
++    // stage input location assignment via vk::location(X) unsupported".
++    { DeclUsage::TexCoord, 8, 16 },
++    // CHERRY: Lollipop's morph/instancing vertex shaders take POSITION2..7.
++    { DeclUsage::Position, 2, 17 },
++    { DeclUsage::Position, 3, 18 },
++    { DeclUsage::Position, 4, 19 },
++    { DeclUsage::Position, 5, 20 },
++    { DeclUsage::Position, 6, 21 },
++    { DeclUsage::Position, 7, 22 },
+ };
+ 
++// CHERRY: any element the table above does not list takes the next location from here, in declaration order, so a
++// shader never mixes explicit and implicit locations (which DXC rejects for the whole SPIR-V shader).
++static constexpr uint32_t USAGE_FALLBACK_LOCATION_BASE = 23;
++
+ static constexpr std::pair<DeclUsage, size_t> INTERPOLATORS[] =
+ {
+     { DeclUsage::TexCoord, 0 },
+@@ -176,6 +191,8 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+ 
+     out += " = ";
+ 
++    const bool writesVertexIndex = instr.dstRegister == 0 && (instr.dstSwizzle & 0x7) != 0x7;
++
+     auto findResult = vertexElements.find(address);
+     assert(findResult != vertexElements.end());
+ 
+@@ -193,7 +210,17 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+         break;
+     }
+ 
+-    print("i{}{}", USAGE_VARIABLES[uint32_t(findResult->second.usage)], uint32_t(findResult->second.usageIndex));
++    // CHERRY: an index other than r0.x (the vertex index) reads another vertex, which the host provides in the vertex atlas.
++    if (instr.srcRegister != 0 || instr.srcSwizzle != 0 || instr.srcRegisterAm || vertexIndexClobbered)
++    {
++        specConstantsMask |= SPEC_CONSTANT_INDEXED_VERTEX_FETCH;
++        const bool isUint = strcmp(USAGE_TYPES[uint32_t(findResult->second.usage)], "uint4") == 0;
++        print("{}VFETCH_INDEXED({}, r{}.{}, {}){}", isUint ? "asuint(" : "", vertexElementLocations[address], instr.srcRegister, SWIZZLES[instr.srcSwizzle], instr.isIndexRounded ? "true" : "false", isUint ? ")" : "");
++    }
++    else
++    {
++        print("i{}{}", USAGE_VARIABLES[uint32_t(findResult->second.usage)], uint32_t(findResult->second.usageIndex));
++    }
+ 
+     switch (findResult->second.usage)
+     {
+@@ -214,6 +241,7 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
+     out += ";\n";
+ 
+     printDstSwizzle01(instr.dstRegister, instr.dstSwizzle);
++    vertexIndexClobbered |= writesVertexIndex;
+ 
+     if (instr.isPredicated)
+     {
+@@ -228,6 +256,8 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, bool bicu
+     if (instr.opcode != FetchOpcode::TextureFetch && instr.opcode != FetchOpcode::GetTextureWeights)
+         return;
+ 
++    vertexIndexClobbered |= instr.dstRegister == 0 && (instr.dstSwizzle & 0x7) != 0x7;
++
+     if (instr.isPredicated)
+     {
+         indent();
+@@ -307,7 +337,7 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, bool bicu
+     switch (instr.dimension)
+     {
+     case TextureDimension::Texture1D:
+-        dimension = "1D";
++        dimension = "2D";
+         componentCount = 1;
+         break;
+     case TextureDimension::Texture2D:
+@@ -326,18 +356,44 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, bool bicu
+ 
+     out += dimension;
+ 
++    if (instr.opcode == FetchOpcode::TextureFetch && instr.constIndex < 16)
++    {
++        uint32_t dimensionCode = 0;
++        if (instr.dimension == TextureDimension::Texture3D)
++            dimensionCode = 1;
++        else if (instr.dimension == TextureDimension::TextureCube)
++            dimensionCode = 2;
++        textureDimensionMask |= dimensionCode << (instr.constIndex * 2);
++    }
++
++    // texCoordDenorm was parsed and dropped, so unnormalized fetches sampled far outside the
++    // texture and clamped to a corner texel.
++    if (instr.opcode == FetchOpcode::TextureFetch && instr.texCoordDenorm &&
++        instr.dimension == TextureDimension::Texture2D)
++    {
++        out += "Unnorm";
++    }
++
+ #ifdef UNLEASHED_RECOMP
+     if (bicubic)
+         out += "Bicubic";
+ #endif
+ 
+     print("({0}_Texture{1}DescriptorIndex, {0}_SamplerDescriptorIndex, ", constNamePtr, dimension);
++
++    if (instr.dimension == TextureDimension::Texture1D)
++        out += "float2(";
++
+     printSrcRegister(componentCount);
+ 
+     switch (instr.dimension)
+     {
++    // CHERRY: the texel scale of the sampler's texture (TEXEL_SCALE in shader_common.h); vertex samplers are never resolves.
++    case TextureDimension::Texture1D:
++        print(", 0.0), float2({}, 0.0), {}", instr.offsetX * 0.5f, instr.constIndex < 16 ? fmt::format("TEXEL_SCALE({})", instr.constIndex) : std::string("1.0"));
++        break;
+     case TextureDimension::Texture2D:
+-        print(", float2({}, {})", instr.offsetX * 0.5f, instr.offsetY * 0.5f);
++        print(", float2({}, {}), {}", instr.offsetX * 0.5f, instr.offsetY * 0.5f, instr.constIndex < 16 ? fmt::format("TEXEL_SCALE({})", instr.constIndex) : std::string("1.0"));
+         break;
+     case TextureDimension::TextureCube:
+         out += ", cubeMapData";
+@@ -455,6 +511,13 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+             }
+             else
+             {
++                // CHERRY: constant operands take relative-addressing slots in src1, src2, src3 order, so a constant after an earlier constant source uses const1Relative.
++                bool constRelative = instr.const0Relative;
++                if (operand == VECTOR_1)
++                    constRelative = instr.src1Select ? instr.const0Relative : instr.const1Relative;
++                else if (operand == VECTOR_2 || operand == SCALAR_0 || operand == SCALAR_1)
++                    constRelative = (instr.src1Select && instr.src2Select) ? instr.const0Relative : instr.const1Relative;
++
+                 auto findResult = float4Constants.find(reg);
+                 if (findResult != float4Constants.end())
+                 {
+@@ -471,7 +534,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+                     #endif
+                         {
+                             regFormatted = fmt::format("{}({}{})", constantName,
+-                                reg - findResult->second->registerIndex, instr.const0Relative ? (instr.constAddressRegisterRelative ? " + a0" : " + aL") : "");
++                                reg - findResult->second->registerIndex, constRelative ? (instr.constAddressRegisterRelative ? " + a0" : " + aL") : "");
+                         }
+                     }
+                     else
+@@ -480,9 +543,17 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+                         regFormatted = constantName;
+                     }
+                 }
++                else if (constRelative && float4Constants.empty())
++                {
++                    // CHERRY: relative constant addressing on a register the
++                    // reflection table does not name. This was an assert --
++                    // compiled out in Release -- followed by emitting the BASE
++                    // register, so the index was silently discarded.
++                    regFormatted = fmt::format("cRel({}{})", reg,
++                        instr.constAddressRegisterRelative ? " + a0" : " + aL");
++                }
+                 else
+                 {
+-                    assert(!instr.const0Relative && !instr.const1Relative);
+                     regFormatted = fmt::format("c{}", reg);
+                 }
+             }
+@@ -663,154 +734,13 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+         println("a0 = (int)clamp(floor(({}).w + 0.5), -256.0, 255.0);", op(VECTOR_0));
+     }
+ 
+-    uint32_t vectorWriteMask = instr.vectorWriteMask;
+-    if (instr.exportData)
+-        vectorWriteMask &= ~instr.scalarWriteMask;
+-
+-    if (vectorWriteMask != 0)
+-    {
+-        indent();
+-        if (!exportRegister.empty())
+-        {
+-            out += exportRegister;
+-            out += '.';
+-        }
+-        else
+-        {
+-            print("r{}.", instr.vectorDest);
+-        }
+-
+-        for (size_t i = 0; i < 4; i++)
+-        {
+-            if ((vectorWriteMask >> i) & 0x1)
+-                out += SWIZZLES[i];
+-        }
+-
+-        out += " = ";
+-
+-        if (instr.vectorSaturate)
+-            out += "saturate(";
+-
+-        switch (instr.vectorOpcode)
+-        {
+-        case AluVectorOpcode::Add:
+-            print("{} + {}", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::Mul:
+-            print("{} * {}", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::Max:
+-        case AluVectorOpcode::MaxA:
+-            print("max({}, {})", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::Min:
+-            print("min({}, {})", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::Seq:
+-            print("{} == {}", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::Sgt:
+-            print("{} > {}", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::Sge:
+-            print("{} >= {}", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::Sne:
+-            print("{} != {}", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::Frc:
+-            print("frac({})", op(VECTOR_0));
+-            break;
+-
+-        case AluVectorOpcode::Trunc:
+-            print("trunc({})", op(VECTOR_0));
+-            break;
+-
+-        case AluVectorOpcode::Floor:
+-            print("floor({})", op(VECTOR_0));
+-            break;
+-
+-        case AluVectorOpcode::Mad:
+-            print("{} * {} + {}", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
+-            break;
+-
+-        case AluVectorOpcode::CndEq:
+-            print("select({} == 0.0, {}, {})", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
+-            break;
+-
+-        case AluVectorOpcode::CndGe:
+-            print("select({} >= 0.0, {}, {})", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
+-            break;
+-
+-        case AluVectorOpcode::CndGt:
+-            print("select({} > 0.0, {}, {})", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
+-            break;
+-
+-        case AluVectorOpcode::Dp4:
+-        case AluVectorOpcode::Dp3:
+-            print("dot({}, {})", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::Dp2Add:
+-            print("dot({}, {}) + {}", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
+-            break;
+-
+-        case AluVectorOpcode::Cube:
+-            print("cube(r{}, cubeMapData)", instr.src1Register);
+-            break;
+-
+-        case AluVectorOpcode::Max4:
+-            print("max4({})", op(VECTOR_0));
+-            break;
+-
+-        case AluVectorOpcode::SetpEqPush:
+-        case AluVectorOpcode::SetpNePush:
+-        case AluVectorOpcode::SetpGtPush:
+-        case AluVectorOpcode::SetpGePush:
+-            print("p0 ? 0.0 : {} + 1.0", op(VECTOR_0));
+-            break;
+-
+-        case AluVectorOpcode::KillEq:
+-            print("any({} == {})", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::KillGt:
+-            print("any({} > {})", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::KillGe:
+-            print("any({} >= {})", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::KillNe:
+-            print("any({} != {})", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-
+-        case AluVectorOpcode::Dst:
+-            print("dst({}, {})", op(VECTOR_0), op(VECTOR_1));
+-            break;
+-        }
+-
+-        if (instr.vectorSaturate)
+-            out += ')';
+-
+-        out += ";\n";
+-    }
+-
++    // CHERRY: Xenos co-issues the vector and scalar halves, so both read the pre-instruction register file: evaluate the scalar half before the vector writeback.
+     if (instr.scalarOpcode != AluScalarOpcode::RetainPrev)
+     {
+         if (instr.scalarOpcode >= AluScalarOpcode::SetpEq && instr.scalarOpcode <= AluScalarOpcode::SetpRstr)
+         {
+             indent();
+-            out += "p0 = ";
++            out += "sp0 = ";
+ 
+             switch (instr.scalarOpcode)
+             {
+@@ -941,11 +871,13 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+             print("{} - ps", op(SCALAR_0));
+             break;
+ 
++        // CHERRY: these read the predicate this instruction just computed. With the co-issue reorder it is still in
++        // sp0 (p0 = sp0 retires after the vector writeback), so reading p0 here would see the previous predicate.
+         case AluScalarOpcode::SetpEq:
+         case AluScalarOpcode::SetpNe:
+         case AluScalarOpcode::SetpGt:
+         case AluScalarOpcode::SetpGe:
+-            out += "p0 ? 0.0 : 1.0";
++            out += "sp0 ? 0.0 : 1.0";
+             break;
+ 
+         case AluScalarOpcode::SetpInv:
+@@ -953,7 +885,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+             break;
+ 
+         case AluScalarOpcode::SetpPop:
+-            print("p0 ? 0.0 : ({} - 1.0)", op(SCALAR_0));
++            print("sp0 ? 0.0 : ({} - 1.0)", op(SCALAR_0));
+             break;
+ 
+         case AluScalarOpcode::SetpClr:
+@@ -961,7 +893,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+             break;
+ 
+         case AluScalarOpcode::SetpRstr:
+-            print("p0 ? 0.0 : {}", op(SCALAR_0));
++            print("sp0 ? 0.0 : {}", op(SCALAR_0));
+             break;
+ 
+         case AluScalarOpcode::KillsEq:
+@@ -1020,12 +952,175 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+         switch (instr.scalarOpcode)
+         {
+         case AluScalarOpcode::MaxAs:
++        case AluScalarOpcode::MaxAsf:
+             indent();
+-            println("a0 = (int)clamp(floor({} + 0.5), -256.0, 255.0);", op(SCALAR_0));
+-            break;     
++            println("sa0 = {};", op(SCALAR_0));
++            break;
++        }
++    }
++
++    uint32_t vectorWriteMask = instr.vectorWriteMask;
++    if (instr.exportData)
++        vectorWriteMask &= ~instr.scalarWriteMask;
++
++    if (exportRegister.empty() && (vectorWriteMask & 0x1) && (instr.vectorDest == 0 || instr.vectorDestRelative))
++        vertexIndexClobbered = true;
++
++    if (vectorWriteMask != 0)
++    {
++        indent();
++        if (!exportRegister.empty())
++        {
++            out += exportRegister;
++            out += '.';
++        }
++        else
++        {
++            print("r{}.", instr.vectorDest);
++        }
++
++        for (size_t i = 0; i < 4; i++)
++        {
++            if ((vectorWriteMask >> i) & 0x1)
++                out += SWIZZLES[i];
++        }
++
++        out += " = ";
++
++        if (instr.vectorSaturate)
++            out += "saturate(";
++
++        switch (instr.vectorOpcode)
++        {
++        case AluVectorOpcode::Add:
++            print("{} + {}", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::Mul:
++            print("{} * {}", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::Max:
++        case AluVectorOpcode::MaxA:
++            print("max({}, {})", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::Min:
++            print("min({}, {})", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::Seq:
++            print("{} == {}", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::Sgt:
++            print("{} > {}", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::Sge:
++            print("{} >= {}", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::Sne:
++            print("{} != {}", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::Frc:
++            print("frac({})", op(VECTOR_0));
++            break;
++
++        case AluVectorOpcode::Trunc:
++            print("trunc({})", op(VECTOR_0));
++            break;
++
++        case AluVectorOpcode::Floor:
++            print("floor({})", op(VECTOR_0));
++            break;
++
++        case AluVectorOpcode::Mad:
++            print("{} * {} + {}", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
++            break;
++
++        case AluVectorOpcode::CndEq:
++            print("select({} == 0.0, {}, {})", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
++            break;
++
++        case AluVectorOpcode::CndGe:
++            print("select({} >= 0.0, {}, {})", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
++            break;
++
++        case AluVectorOpcode::CndGt:
++            print("select({} > 0.0, {}, {})", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
++            break;
++
++        case AluVectorOpcode::Dp4:
++        case AluVectorOpcode::Dp3:
++            print("dot({}, {})", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::Dp2Add:
++            print("dot({}, {}) + {}", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
++            break;
++
++        case AluVectorOpcode::Cube:
++            print("cube(r{}, cubeMapData)", instr.src1Register);
++            break;
++
++        case AluVectorOpcode::Max4:
++            print("max4({})", op(VECTOR_0));
++            break;
++
++        case AluVectorOpcode::SetpEqPush:
++        case AluVectorOpcode::SetpNePush:
++        case AluVectorOpcode::SetpGtPush:
++        case AluVectorOpcode::SetpGePush:
++            print("p0 ? 0.0 : {} + 1.0", op(VECTOR_0));
++            break;
++
++        case AluVectorOpcode::KillEq:
++            print("any({} == {})", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::KillGt:
++            print("any({} > {})", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::KillGe:
++            print("any({} >= {})", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::KillNe:
++            print("any({} != {})", op(VECTOR_0), op(VECTOR_1));
++            break;
++
++        case AluVectorOpcode::Dst:
++            print("dst({}, {})", op(VECTOR_0), op(VECTOR_1));
++            break;
++        }
++
++        if (instr.vectorSaturate)
++            out += ')';
++
++        out += ";\n";
++    }
++
++    if (instr.scalarOpcode != AluScalarOpcode::RetainPrev)
++    {
++        if (instr.scalarOpcode >= AluScalarOpcode::SetpEq && instr.scalarOpcode <= AluScalarOpcode::SetpRstr)
++        {
++            indent();
++            out += "p0 = sp0;\n";
++        }
++
++        switch (instr.scalarOpcode)
++        {
++        case AluScalarOpcode::MaxAs:
++            indent();
++            out += "a0 = (int)clamp(floor(sa0 + 0.5), -256.0, 255.0);\n";
++            break;
+         case AluScalarOpcode::MaxAsf:
+             indent();
+-            println("a0 = (int)clamp(floor({}), -256.0, 255.0);", op(SCALAR_0));
++            out += "a0 = (int)clamp(floor(sa0), -256.0, 255.0);\n";
+             break;
+         }
+     }
+@@ -1034,6 +1129,9 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+     if (instr.exportData)
+         scalarWriteMask &= ~instr.vectorWriteMask;
+ 
++    if (exportRegister.empty() && (scalarWriteMask & 0x1) && (instr.scalarDest == 0 || instr.scalarDestRelative))
++        vertexIndexClobbered = true;
++
+     if (scalarWriteMask != 0)
+     {
+         indent();
+@@ -1100,18 +1198,58 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
+ 
+ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_view& include)
+ {
++    vertexIndexClobbered = false;
+     const auto shaderContainer = reinterpret_cast<const ShaderContainer*>(shaderData);
+ 
+     assert((shaderContainer->flags & 0xFFFFFF00) == 0x102A1100);
+-    assert(shaderContainer->constantTableOffset != NULL);
+ 
+     out += include;
+     out += '\n';
+ 
+     isPixelShader = (shaderContainer->flags & 0x1) == 0;
+ 
+-    const auto constantTableContainer = reinterpret_cast<const ConstantTableContainer*>(shaderData + shaderContainer->constantTableOffset);
+-    constantTableData = reinterpret_cast<const uint8_t*>(&constantTableContainer->constantTable);
++    // CHERRY: none of Lollipop Chainsaw's dumped containers carries a D3DX reflection table (constantTableOffset == 0),
++    // so the register file has to be declarable by number alone. Upstream asserts here and, in Release, reads the
++    // container header as a constant table.
++    const ConstantTableContainer* constantTableContainer = nullptr;
++    uint32_t constantCount = 0;
++    if (shaderContainer->constantTableOffset != NULL)
++    {
++        constantTableContainer = reinterpret_cast<const ConstantTableContainer*>(shaderData + shaderContainer->constantTableOffset);
++        constantTableData = reinterpret_cast<const uint8_t*>(&constantTableContainer->constantTable);
++        constantCount = constantTableContainer->constantTable.constants;
++    }
++
++    // CHERRY: BOTH stages get 256 float4 registers (upstream: 224 for pixel, an Unleashed figure). The guest device
++    // keeps vertex constants at +0x780, pixel constants at +0x1780 and the bool constants at +0x2780, 0x1000 =
++    // 256 * 16 bytes apart, and the definition tables write up to c255.
++    const uint32_t float4RegisterCount = 256;
++    constexpr uint32_t kSamplerRegisterCount = 16;
++    constexpr uint32_t kBoolRegisterCount = 16;
++    // CHERRY: vertex texture fetch reads fetch constants 16..19, which D3DDevice_SetTexture fills for samplers 16..19; their 2D texture and
++    // sampler indices sit after the vertex slots in the shared constants, at +336 and +352 (c21 and c22).
++    constexpr uint32_t kVertexSamplerCount = 4;
++    constexpr uint32_t kVertexTextureOffset = 336;
++    constexpr uint32_t kVertexSamplerOffset = 352;
++
++    // CHERRY: the float4 literals the definition table bakes into main() as `float4 cN = ...` locals. The register
++    // file declarations below must skip them (a `#define cN` would rewrite the local's declaration), and cRel()
++    // selects them by index so relative addressing still sees the literal.
++    std::string bakedRelativeSelect;
++    if (shaderContainer->definitionTableOffset != NULL)
++    {
++        auto definitionTable = reinterpret_cast<const DefinitionTable*>(shaderData + shaderContainer->definitionTableOffset);
++        for (auto definitions = definitionTable->definitions; *definitions != 0; definitions += 2)
++        {
++            auto definition = reinterpret_cast<const Float4Definition*>(definitions);
++            for (uint16_t i = 0; i < (definition->count + 3) / 4; i++)
++            {
++                uint32_t reg = definition->registerIndex + i - (isPixelShader ? 256 : 0);
++                if (definedFloat4Constants.insert(reg).second)
++                    bakedRelativeSelect += fmt::format("(i) == {0} ? c{0} : ", reg);
++            }
++        }
++    }
+ 
+     out += "#ifdef __spirv__\n\n";
+ 
+@@ -1120,7 +1258,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     bool hasIndexCount = false;
+ #endif
+ 
+-    for (uint32_t i = 0; i < constantTableContainer->constantTable.constants; i++)
++    for (uint32_t i = 0; i < constantCount; i++)
+     {
+         const auto constantInfo = reinterpret_cast<const ConstantInfo*>(
+             constantTableData + constantTableContainer->constantTable.constantInfo + i * sizeof(ConstantInfo));
+@@ -1152,7 +1290,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+             if (constantInfo->registerCount > 1)
+             {
+-                uint32_t tailCount = (isPixelShader ? 224 : 256) - constantInfo->registerIndex;
++                uint32_t tailCount = float4RegisterCount - constantInfo->registerIndex;
+ 
+                 println("#define {}(INDEX) select((INDEX) < {}, vk::RawBufferLoad<float4>(g_PushConstants.{}ShaderConstants + ({} + min(INDEX, {})) * 16, 0x10), 0.0)",
+                     constantName, tailCount, shaderName, constantInfo->registerIndex.get(), tailCount - 1);
+@@ -1171,6 +1309,18 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+         case RegisterSet::Sampler:
+         {
++            if (constantInfo->registerIndex >= kSamplerRegisterCount)
++            {
++                const uint32_t vertexSampler = constantInfo->registerIndex - kSamplerRegisterCount;
++                if (vertexSampler < kVertexSamplerCount)
++                {
++                    println("#define {}_Texture2DDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})", constantName, kVertexTextureOffset + vertexSampler * 4);
++                    println("#define {}_SamplerDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})", constantName, kVertexSamplerOffset + vertexSampler * 4);
++                    samplers.emplace(constantInfo->registerIndex, constantName);
++                }
++                break;
++            }
++
+             for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
+             {
+                 println("#define {}_Texture{}DescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})",
+@@ -1187,33 +1337,86 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         }
+     }
+ 
++    // CHERRY: declare every register the reflection table did NOT name and the definition table does not bake, so the
++    // emitters' `c{N}`, `s{N}_*` and `b{N}` fallbacks resolve. Unconditional: a shader with a reflection table can
++    // still reference registers outside it.
++    {
++        const char* shaderName = isPixelShader ? "Pixel" : "Vertex";
++
++        for (uint32_t i = 0; i < float4RegisterCount; i++)
++        {
++            if (float4Constants.find(i) == float4Constants.end() && definedFloat4Constants.count(i) == 0)
++                println("#define c{} vk::RawBufferLoad<float4>(g_PushConstants.{}ShaderConstants + {}, 0x10)", i, shaderName, i * 16);
++        }
++
++        if (float4Constants.empty())
++            println("#define cRel(i) ({}vk::RawBufferLoad<float4>(g_PushConstants.{}ShaderConstants + (i) * 16, 0x10))", bakedRelativeSelect, shaderName);
++
++        for (uint32_t i = 0; i < kSamplerRegisterCount; i++)
++        {
++            if (samplers.find(i) != samplers.end())
++                continue;
++
++            for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
++                println("#define s{}_Texture{}DescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})", i, TEXTURE_DIMENSIONS[j], j * 64 + i * 4);
++
++            println("#define s{}_SamplerDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})", i, std::size(TEXTURE_DIMENSIONS) * 64 + i * 4);
++        }
++
++        for (uint32_t i = 0; i < kVertexSamplerCount; i++)
++        {
++            if (samplers.find(kSamplerRegisterCount + i) != samplers.end())
++                continue;
++
++            println("#define s{}_Texture2DDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})", kSamplerRegisterCount + i, kVertexTextureOffset + i * 4);
++            println("#define s{}_SamplerDescriptorIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {})", kSamplerRegisterCount + i, kVertexSamplerOffset + i * 4);
++        }
++    }
++
+     out += "\n#else\n\n";
+ 
+     println("cbuffer {}ShaderConstants : register(b{}, space4)", isPixelShader ? "Pixel" : "Vertex", isPixelShader ? 1 : 0);
+     out += "{\n";
+ 
+-    for (uint32_t i = 0; i < constantTableContainer->constantTable.constants; i++)
+-    {
+-        const auto constantInfo = reinterpret_cast<const ConstantInfo*>(
+-            constantTableData + constantTableContainer->constantTable.constantInfo + i * sizeof(ConstantInfo));
++    // Individually named cbuffer members cannot be indexed dynamically, so a register file the reflection table never named is declared as an array instead.
++    const bool indexableRegisterFile = float4Constants.empty();
+ 
+-        if (constantInfo->registerSet == RegisterSet::Float4)
++    if (indexableRegisterFile)
++    {
++        println("\tfloat4 g_Constants[{}] : packoffset(c0);", float4RegisterCount);
++    }
++    else
++    {
++        for (uint32_t i = 0; i < constantCount; i++)
+         {
+-            const char* constantName = reinterpret_cast<const char*>(constantTableData + constantInfo->name);
++            const auto constantInfo = reinterpret_cast<const ConstantInfo*>(
++                constantTableData + constantTableContainer->constantTable.constantInfo + i * sizeof(ConstantInfo));
+ 
+-            print("\tfloat4 {}", constantName);
++            if (constantInfo->registerSet == RegisterSet::Float4)
++            {
++                const char* constantName = reinterpret_cast<const char*>(constantTableData + constantInfo->name);
+ 
+-            if (constantInfo->registerCount > 1)
+-                print("[{}]", constantInfo->registerCount.get());
++                print("\tfloat4 {}", constantName);
+ 
+-            println(" : packoffset(c{});", constantInfo->registerIndex.get());
++                if (constantInfo->registerCount > 1)
++                    print("[{}]", constantInfo->registerCount.get());
+ 
+-            if (constantInfo->registerCount > 1)
+-            {
+-                uint32_t tailCount = (isPixelShader ? 224 : 256) - constantInfo->registerIndex;
+-                println("#define {0}(INDEX) select((INDEX) < {1}, {0}[min(INDEX, {2})], 0.0)", constantName, tailCount, tailCount - 1);
++                println(" : packoffset(c{});", constantInfo->registerIndex.get());
++
++                if (constantInfo->registerCount > 1)
++                {
++                    uint32_t tailCount = float4RegisterCount - constantInfo->registerIndex;
++                    println("#define {0}(INDEX) select((INDEX) < {1}, {0}[min(INDEX, {2})], 0.0)", constantName, tailCount, tailCount - 1);
++                }
+             }
+         }
++
++        // Same register file for the DXIL path, as individually named cbuffer members so `c{reg}` from the expression emitters resolves directly.
++        for (uint32_t i = 0; i < float4RegisterCount; i++)
++        {
++            if (float4Constants.find(i) == float4Constants.end() && definedFloat4Constants.count(i) == 0)
++                println("\tfloat4 c{0} : packoffset(c{0});", i);
++        }
+     }
+ 
+     out += "};\n\n";
+@@ -1221,7 +1424,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     out += "cbuffer SharedConstants : register(b2, space4)\n";
+     out += "{\n";
+ 
+-    for (uint32_t i = 0; i < constantTableContainer->constantTable.constants; i++)
++    for (uint32_t i = 0; i < constantCount; i++)
+     {
+         const auto constantInfo = reinterpret_cast<const ConstantInfo*>(
+             constantTableData + constantTableContainer->constantTable.constantInfo + i * sizeof(ConstantInfo));
+@@ -1230,6 +1433,17 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         {
+             const char* constantName = reinterpret_cast<const char*>(constantTableData + constantInfo->name);
+ 
++            if (constantInfo->registerIndex >= kSamplerRegisterCount)
++            {
++                const uint32_t vertexSampler = constantInfo->registerIndex - kSamplerRegisterCount;
++                if (vertexSampler < kVertexSamplerCount)
++                {
++                    println("\tuint {}_Texture2DDescriptorIndex : packoffset(c{}.{});", constantName, kVertexTextureOffset / 16, SWIZZLES[vertexSampler]);
++                    println("\tuint {}_SamplerDescriptorIndex : packoffset(c{}.{});", constantName, kVertexSamplerOffset / 16, SWIZZLES[vertexSampler]);
++                }
++                continue;
++            }
++
+             for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
+             {
+                 println("\tuint {}_Texture{}DescriptorIndex : packoffset(c{}.{});",
+@@ -1241,12 +1455,44 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         }
+     }
+ 
++    for (uint32_t i = 0; i < kSamplerRegisterCount; i++)
++    {
++        if (samplers.find(i) != samplers.end())
++            continue;
++
++        for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
++            println("\tuint s{}_Texture{}DescriptorIndex : packoffset(c{}.{});", i, TEXTURE_DIMENSIONS[j], j * 4 + i / 4, SWIZZLES[i % 4]);
++
++        println("\tuint s{}_SamplerDescriptorIndex : packoffset(c{}.{});", i, 4 * std::size(TEXTURE_DIMENSIONS) + i / 4, SWIZZLES[i % 4]);
++    }
++
++    for (uint32_t i = 0; i < kVertexSamplerCount; i++)
++    {
++        if (samplers.find(kSamplerRegisterCount + i) != samplers.end())
++            continue;
++
++        println("\tuint s{}_Texture2DDescriptorIndex : packoffset(c{}.{});", kSamplerRegisterCount + i, kVertexTextureOffset / 16, SWIZZLES[i]);
++        println("\tuint s{}_SamplerDescriptorIndex : packoffset(c{}.{});", kSamplerRegisterCount + i, kVertexSamplerOffset / 16, SWIZZLES[i]);
++    }
++
+     out += "\tDEFINE_SHARED_CONSTANTS();\n";
+     out += "};\n\n";
+ 
++    // Placement is not cosmetic: `packoffset(cN)` uses cN as a register token, so these defines have to come after every cbuffer.
++    if (indexableRegisterFile)
++    {
++        for (uint32_t i = 0; i < float4RegisterCount; i++)
++        {
++            if (definedFloat4Constants.count(i) == 0)
++                println("#define c{} g_Constants[{}]", i, i);
++        }
++
++        println("#define cRel(i) ({}g_Constants[i])", bakedRelativeSelect);
++    }
++
+     out += "#endif\n";
+ 
+-    for (uint32_t i = 0; i < constantTableContainer->constantTable.constants; i++)
++    for (uint32_t i = 0; i < constantCount; i++)
+     {
+         const auto constantInfo = reinterpret_cast<const ConstantInfo*>(
+             constantTableData + constantTableContainer->constantTable.constantInfo + i * sizeof(ConstantInfo));
+@@ -1259,6 +1505,19 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         }
+     }
+ 
++    // CHERRY: bool registers are packed into g_Booleans (vertex b0..b15 in bits 0..15, pixel b0..b15 in bits 16..31);
++    // the emitter falls back to `b{N}` with N the microcode bool address, so define those to the matching bit test.
++    // Xenos has 256 bool constants and D3D gives the pixel stage the upper 128, so Lollipop's pixel shaders address
++    // their b0 as `b128`; the pixel stage also gets `b0..b15` for compilers that address them unbiased.
++    for (uint32_t i = 0; i < kBoolRegisterCount; i++)
++    {
++        if (boolConstants.find(i) == boolConstants.end())
++            println("\t#define b{} (g_Booleans & (1 << {}))", i, i + (isPixelShader ? 16 : 0));
++
++        if (isPixelShader && boolConstants.find(128 + i) == boolConstants.end())
++            println("\t#define b{} (g_Booleans & (1 << {}))", 128 + i, i + 16);
++    }
++
+     out += '\n';
+ 
+     const auto shader = reinterpret_cast<const Shader*>(shaderData + shaderContainer->shaderOffset);
+@@ -1302,6 +1561,9 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     else
+     {
+         auto vertexShader = reinterpret_cast<const VertexShader*>(shader);
++        uint32_t fallbackLocationCount = 0;
++        // CHERRY: UE3 fetches the same element from more than one vfetch (one per branch); each gets an entry, so declare the input once and point every fetch address at it.
++        std::unordered_map<uint32_t, uint32_t> declaredElementLocations;
+         for (uint32_t i = 0; i < vertexShader->vertexElementCount; i++)
+         {
+             union
+@@ -1312,6 +1574,14 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+             value = vertexShader->vertexElementsAndInterpolators[vertexShader->field18 + i];
+ 
++            const uint32_t usageKey = (uint32_t(vertexElement.usage) << 4) | uint32_t(vertexElement.usageIndex);
++            if (auto declared = declaredElementLocations.find(usageKey); declared != declaredElementLocations.end())
++            {
++                vertexElementLocations[uint32_t(vertexElement.address)] = declared->second;
++                vertexElements.emplace(uint32_t(vertexElement.address), vertexElement);
++                continue;
++            }
++
+             const char* usageType = USAGE_TYPES[uint32_t(vertexElement.usage)];
+ 
+         #ifdef UNLEASHED_RECOMP
+@@ -1324,15 +1594,24 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+             out += '\t';
+ 
++            bool hasLocation = false;
++            uint32_t location = 0;
+             for (auto& usageLocation : USAGE_LOCATIONS)
+             {
+                 if (usageLocation.usage == vertexElement.usage && usageLocation.usageIndex == vertexElement.usageIndex)
+                 {
+-                    print("[[vk::location({})]] ", usageLocation.location);
++                    location = usageLocation.location;
++                    hasLocation = true;
+                     break;
+                 }
+             }
+ 
++            if (!hasLocation)
++                location = USAGE_FALLBACK_LOCATION_BASE + fallbackLocationCount++;
++            print("[[vk::location({})]] ", location);
++            vertexElementLocations[uint32_t(vertexElement.address)] = location;
++            declaredElementLocations.emplace(usageKey, location);
++
+             println("in {0} i{1}{2} : {3}{2},", usageType, USAGE_VARIABLES[uint32_t(vertexElement.usage)],
+                 uint32_t(vertexElement.usageIndex), USAGE_SEMANTICS[uint32_t(vertexElement.usage)]);
+ 
+@@ -1345,9 +1624,13 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+             out += "\tin uint iVertexId : SV_VertexID,\n";
+             out += "\tin uint iInstanceId : SV_InstanceID,\n";
+         }
++    #else
++        // CHERRY: r0.x starts as the vertex index.
++        out += "\tin uint iVertexId : SV_VertexID,\n";
+     #endif
+ 
+-        out += "\tout float4 oPos : SV_Position";
++        // CHERRY: UE3 draws depth and then colour with an equal-or-closer test from different shaders, which the console rounds identically, so the position math must not be fused or reordered.
++        out += "\tout precise float4 oPos : SV_Position";
+ 
+         for (auto& [usage, usageIndex] : INTERPOLATORS)
+             print(",\n\tout float4 o{0}{1} : {2}{1}", USAGE_VARIABLES[uint32_t(usage)], usageIndex, USAGE_SEMANTICS[uint32_t(usage)]);
+@@ -1356,6 +1639,12 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     out += ")\n";
+     out += "{\n";
+ 
++#ifndef UNLEASHED_RECOMP
++    // CHERRY: a vertex shader can reach its end on a path that never wrote oPos, and DXC rejects the half-pixel epilogue reading it.
++    if (!isPixelShader)
++        out += "\toPos = 0.0;\n";
++#endif
++
+ #ifdef UNLEASHED_RECOMP
+     if (hasMtxProjection)
+     {
+@@ -1418,7 +1707,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         out += "\n";
+     }
+ 
+-    bool printedRegisters[32]{};
++    bool printedRegisters[64]{};
+ 
+     uint32_t interpolatorCount = (shader->interpolatorInfo >> 5) & 0x1F;
+ 
+@@ -1457,20 +1746,27 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         out += "\n";
+     }
+ 
+-    for (size_t i = 0; i < 32; i++)
++    for (size_t i = 0; i < 64; i++)
+     {
+         if (!printedRegisters[i])
+         {
+             print("\tfloat4 r{} = ", i);
+             if (isPixelShader && i == ((shader->fieldC >> 8) & 0xFF))
+             {
+-                out += "float4((iPos.xy - 0.5) * float2(iFace ? 1.0 : -1.0, 1.0), 0.0, 0.0);\n";
++                // CHERRY: the host renders at a multiple of the guest resolution; the shader still expects guest pixels.
++                out += "float4((iPos.xy * g_InvResolutionScale - 0.5) * float2(iFace ? 1.0 : -1.0, 1.0), 0.0, 0.0);\n";
+             }
+         #ifdef UNLEASHED_RECOMP
+             else if (!isPixelShader && hasIndexCount && i == 0)
+             {
+                 out += "float4(iVertexId + g_IndexCount.x * iInstanceId, 0.0, 0.0, 0.0);\n";
+             }
++        #else
++            else if (!isPixelShader && i == 0)
++            {
++                // CHERRY: the guest index; the host rebases each draw's vertices to the first one it reads.
++                out += "float4(float(int(iVertexId) + g_VertexIndexBase), 0.0, 0.0, 0.0);\n";
++            }
+         #endif
+             else
+             {
+@@ -1483,6 +1779,8 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     out += "\tint aL = 0;\n";
+     out += "\tbool p0 = false;\n";
+     out += "\tfloat ps = 0.0;\n";
++    out += "\tbool sp0 = false;\n";
++    out += "\tfloat sa0 = 0.0;\n";
+     if (isPixelShader)
+     {
+ #ifdef UNLEASHED_RECOMP
+@@ -1510,6 +1808,11 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     uint32_t instrSize = shader->size;
+     bool simpleControlFlow = true;
+ 
++    // CHERRY: the CF index of each instruction and the targets of the forward jumps still open at it, so a jump
++    // that cannot be emitted as a nested `if` is caught by its target rather than by the `direction` bit alone.
++    uint32_t scanPc = 0;
++    std::vector<uint32_t> openJumpTargets;
++
+     while (instrAddress < instrSize)
+     {
+         code0 = controlFlowCode[0];
+@@ -1520,6 +1823,10 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+         for (auto& cfInstr : controlFlow)
+         {
+             uint32_t address = 0;
++            uint32_t currentPc = scanPc++;
++
++            while (!openJumpTargets.empty() && openJumpTargets.back() <= currentPc)
++                openJumpTargets.pop_back();
+ 
+             switch (cfInstr.opcode)
+             {
+@@ -1542,10 +1849,21 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+ 
+             case ControlFlowOpcode::CondJmp:
+             {
+-                if (cfInstr.condJmp.isUnconditional || cfInstr.condJmp.direction)
++                // CHERRY: Lollipop's compiler emits backward predicated jumps (do-while loops, e.g. CF 9 -> 4) with
++                // `direction` clear. Treated as a forward `if`, their end label falls before the `if` itself and the
++                // brace-closing loop underflows `indentation`, so indent() appends ~4G tabs until std::bad_alloc.
++                // A target at or before the jump, or one past an enclosing `if`'s end, needs the pc switch.
++                const uint32_t target = cfInstr.condJmp.address;
++                if (cfInstr.condJmp.isUnconditional || cfInstr.condJmp.direction || target <= currentPc ||
++                    (!openJumpTargets.empty() && target > openJumpTargets.back()))
++                {
+                     simpleControlFlow = false;
++                }
+                 else
+-                    ++ifEndLabels[cfInstr.condJmp.address];
++                {
++                    ++ifEndLabels[target];
++                    openJumpTargets.push_back(target);
++                }
+ 
+                 break;
+             }
+@@ -1567,7 +1885,9 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+     else
+     {
+         out += "\n\tuint pc = 0;\n";
+-        out += "\twhile (true)\n";
++        // CHERRY: a backward jump loops until a predicate fed by game constants flips; a NaN or stale constant
++        // spins forever and the host GPU removes the device (DXGI_ERROR_DEVICE_HUNG). Bound the pc switch.
++        out += "\t[loop] for (uint pcGuard = 0; pcGuard < 65536; ++pcGuard)\n";
+         out += "\t{\n";
+         out += "\t\tswitch (pc)\n";
+         out += "\t\t{\n";
+@@ -1809,6 +2129,17 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                     indent();
+                     out += "}";
+ 
++                    // CHERRY: the EDRAM format's range, after the alpha test.
++                    auto pixelShader = reinterpret_cast<const PixelShader*>(shader);
++                    for (uint32_t i = 0; i < 4; i++)
++                    {
++                        if (pixelShader->outputs & (PIXEL_SHADER_OUTPUT_COLOR0 << i))
++                        {
++                            indent();
++                            println("oC{0} = colorClamp(oC{0}, (g_ColorClamp >> {1}) & 3);", i, i * 2);
++                        }
++                    }
++
+                 #ifdef UNLEASHED_RECOMP
+                     specConstantsMask |= SPEC_CONSTANT_ALPHA_TO_COVERAGE;
+ 
+@@ -1833,6 +2164,8 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
+                 #endif
+                     {
+                         out += "\toPos.xy += g_HalfPixelOffset * oPos.w;\n";
++                        // CHERRY: D3D's DepthBias (PolyOffsetFrontOffset), which the host converts to NDC depth.
++                        out += "\toPos.z += g_DepthOffset * oPos.w;\n";
+                     }
+                 }
+ 
+diff --git a/XenosRecomp/shader_recompiler.h b/XenosRecomp/shader_recompiler.h
+index b2e317d..2c2faf8 100644
+--- a/XenosRecomp/shader_recompiler.h
++++ b/XenosRecomp/shader_recompiler.h
+@@ -27,12 +27,19 @@ struct ShaderRecompiler : StringBuffer
+     bool isPixelShader = false;
+     const uint8_t* constantTableData = nullptr;
+     std::unordered_map<uint32_t, VertexElement> vertexElements;
++    std::unordered_map<uint32_t, uint32_t> vertexElementLocations; // CHERRY: [[vk::location]] by fetch address, for VFETCH_INDEXED
++    bool vertexIndexClobbered = false; // CHERRY: an earlier instruction wrote r0.x, so it no longer holds the vertex index
+     std::unordered_map<uint32_t, std::string> interpolators;
+     std::unordered_map<uint32_t, const ConstantInfo*> float4Constants;
++    std::unordered_set<uint32_t> definedFloat4Constants; // CHERRY: registers baked from the definition table
+     std::unordered_map<uint32_t, const char*> boolConstants;
+     std::unordered_map<uint32_t, const char*> samplers;
+     std::unordered_map<uint32_t, uint32_t> ifEndLabels;
+     uint32_t specConstantsMask = 0;
++    // 2 bits per sampler slot: 0 = Texture2D, 1 = Texture3D, 2 = TextureCube. The host cannot tell
++    // from the fetch constant alone which heap the shader will index, and a 2D resource read
++    // through a Texture3D view samples zero.
++    uint32_t textureDimensionMask = 0;
+ 
+ #ifdef UNLEASHED_RECOMP
+     bool hasMtxProjection = false;

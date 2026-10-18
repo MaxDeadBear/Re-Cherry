@@ -1,81 +1,51 @@
-
 {
     "version": 6,
     "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
     "configurePresets": [
         {
-            "name": "windows-base",
+            "name": "base",
             "hidden": true,
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/out/build/${presetName}",
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang",
-                "CMAKE_CXX_COMPILER": "clang++"
-            },
-            "condition": {
-                "type": "equals",
-                "lhs": "${hostSystemName}",
-                "rhs": "Windows"
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_PREFIX_PATH": "$env{REXGLUE_SDK}",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
             }
         },
         {
-            "name": "linux-base",
-            "hidden": true,
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "name": "relwithdebinfo",
+            "displayName": "RelWithDebInfo",
+            "inherits": "base",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+        },
+        {
+            "name": "release",
+            "displayName": "Release",
+            "inherits": "base",
             "cacheVariables": {
-                "CMAKE_C_COMPILER": "clang-20",
-                "CMAKE_CXX_COMPILER": "clang++-20"
-            },
-            "condition": {
-                "type": "equals",
-                "lhs": "${hostSystemName}",
-                "rhs": "Linux"
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_MAP_IMPORTED_CONFIG_RELEASE": "Release;RelWithDebInfo"
             }
         },
         {
-            "name": "win-amd64-debug",
-            "displayName": "Windows AMD64 Debug",
-            "inherits": "windows-base",
+            "name": "debug",
+            "displayName": "Debug",
+            "inherits": "base",
             "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
         },
         {
-            "name": "win-amd64-release",
-            "displayName": "Windows AMD64 Release",
-            "inherits": "windows-base",
-            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
-        },
-        {
-            "name": "linux-amd64-debug",
-            "displayName": "Linux AMD64 Debug",
-            "inherits": "linux-base",
-            "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
-        },
-        {
-            "name": "linux-amd64-release",
-            "displayName": "Linux AMD64 Release",
-            "inherits": "linux-base",
-            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
-        },
-        {
-            "name": "win-amd64-relwithdebinfo",
-            "displayName": "Windows AMD64 RelWithDebInfo",
-            "inherits": "windows-base",
-            "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
-        },
-        {
-            "name": "linux-amd64-relwithdebinfo",
-            "displayName": "Linux AMD64 RelWithDebInfo",
-            "inherits": "linux-base",
-            "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+            "name": "compare",
+            "displayName": "Xenia side-by-side compare (compare/xenia/README.md)",
+            "inherits": "base",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "CHERRY_XENIA_COMPARE": "ON" }
         }
     ],
     "buildPresets": [
-        { "name": "win-amd64-debug", "configurePreset": "win-amd64-debug" },
-        { "name": "win-amd64-release", "configurePreset": "win-amd64-release" },
-        { "name": "win-amd64-relwithdebinfo", "configurePreset": "win-amd64-relwithdebinfo" },
-        { "name": "linux-amd64-debug", "configurePreset": "linux-amd64-debug" },
-        { "name": "linux-amd64-release", "configurePreset": "linux-amd64-release" },
-        { "name": "linux-amd64-relwithdebinfo", "configurePreset": "linux-amd64-relwithdebinfo" }
+        { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo" },
+        { "name": "release", "configurePreset": "release" },
+        { "name": "debug", "configurePreset": "debug" },
+        { "name": "compare", "configurePreset": "compare" }
     ]
 }

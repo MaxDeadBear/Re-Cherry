@@ -1,34 +1,29 @@
 <img width="1287" height="832" alt="Re_cherry_logo" src="https://github.com/user-attachments/assets/ec7c9bdc-1438-44d9-9760-bfe054b9971d" />
 
+Re-Cherry is a [ReXGlue](https://github.com/rexglue/rexglue-sdk) static recompilation of Lollipop Chainsaw (Xbox 360).
+
 HOW TO BUILD
 ----------------------------------------------
-Install Rexglue-SDk following the <a href="https://github.com/rexglue/rexglue-sdk/wiki">wik</a>
-<br>
-install Visual Studio Community edition and ensure you install the desktop development with C++ and make sure you check the box that says C++ clang compiler for windows (note: if you are using Mac or linux you can skip this for you will have to follow the wiki linked in step 1 to build the game)
-<br>
-clone/download the repository
-<br>
-dump your copy of Lollipop: Chainsaw (Xbox360) and use a tool like ISO-Extract to dump the contents of the iso (INCLUDING THE DEFAULT.XEX FILE)
-<br>
-place the contents of the iso in the assets folder(INCLUDING THE DEFAULT.XEX FILE)
-<br>
-open the folder in visual studio, go into cmake targets view
-<br>
-change the configuration to win-amd64-relwithdebinfo
-<br>
-put rexglue.exe in your path environment variable and do rexglue codegen re_cherry_config.toml in a terminal (visual studios works, or you can use windows default terminal/cmd/powershell)
-<br>
-right click re_cherry project and select build all
-<br>
-copy the assets folder with the dumped contents of the iso in out/build/win-amd64-relwithdebinfo
+Full instructions are in [docs/building.md](docs/building.md). In short:
+
+1. Install the ReXGlue SDK version named in `re_cherry_manifest.toml` and set `REXGLUE_SDK` to it (or put its `bin/` on your `PATH`).
+2. Install clang, CMake and Ninja. On Windows, the Visual Studio "Desktop development with C++" workload with "C++ Clang tools for Windows" checked provides all three.
+3. Dump your copy of Lollipop Chainsaw (Xbox 360) and extract the ISO (including `default.xex`) into `assets/`.
+4. `rexglue codegen re_cherry_manifest.toml`
+5. `cmake --preset relwithdebinfo` then `cmake --build --preset relwithdebinfo` (in Visual Studio: open the folder, pick the `RelWithDebInfo` preset, Build All).
 
 HOW TO USE
 ----------------------------------
-for the time being until a launcher is completed all you must do is download the repo and go into out/build/win-amd64-relwithdebinfo and either put the assets folder with the dumped assets,and the default.xex in it or make a new folder somewhere and place the assets with the default.xex in there the only folder/files you should have are the ashgame folder with its files and the default.xex
+The game looks for an `assets/` folder holding `default.xex` next to `re_cherry.exe` or in any folder above it, so a build in `out/build/relwithdebinfo/` finds the repository's `assets/` on its own. For a standalone copy, put `re_cherry.exe` (and the DLLs beside it) in a folder together with an `assets/` folder that contains the `AshGame` folder and `default.xex`. `--game_data_root=<path>` points it anywhere else.
+
+Settings are in the F4 overlay: Lollipop/Performance (`target_fps` 30/60), Lollipop/Costumes (costume slot swaps, mods go in `assets/SkinMods/`) and Lollipop/Patches (Xbox Live prompt skip). F12 toggles the FPS counter.
 
 CURRENT ISSUES WITH THE GAME
 --------------------------------------
-Screen-Tearing 
+Screen-Tearing
+
+Re-Cherry uses its own native renderer instead of an emulated GPU, and it is in early bring-up: the game runs but the screen stays black, and the F4/F12 overlays are not drawn yet. See [docs/renderer/README.md](docs/renderer/README.md).
+
 IF YOU FIND ANY CRASHES PLEASE MAKE AN ISSUE EXPLAINING WHERE IT WAS AND WHAT YOU WERE DOING (i.e. went to high-school level, game crashed during loading or nick-toss on enemy causing the game to crash)(no these dont happen anymore they're just examples)
 
 CREDITS

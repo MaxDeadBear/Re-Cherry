@@ -1,0 +1,30 @@
+# Build output
+/out/
+
+# Machine-local presets (hold this machine's SDK path)
+CMakeUserPresets.json
+
+# IDE state
+.vs/
+.vscode/
+*.code-workspace
+
+# Game data the user supplies (see assets/.gitignore and generated/.gitignore)
+*.iso
+*.xexp
+
+# XenosRecomp's output, built from the user's game (docs/renderer/shaders.md); CMake falls back to shader_cache_empty.cpp
+/res/shader_cache/shader_cache.cpp
+
+# Debug captures and dumps written next to a running build
+/shader_dump/
+/shots/
+*.rdc
+*.log
+
+# IDA decompiler export of the game's code (tools/ida/export_all.py)
+/decomp/
+
+# Python
+__pycache__/
+/rdcaps/

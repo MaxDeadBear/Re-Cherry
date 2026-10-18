@@ -1,0 +1,15 @@
+[project]
+name = "re_cherry"
+sdk_version = "0.10.0"
+game_root = "assets"
+
+[entrypoint]
+file_path = "assets/default.xex"
+out_directory_path = "generated/default"
+includes = [
+  "config/functions.toml",
+  "config/d3d.toml",
+]
+
+setjmp_address  = 0x82BD89D0
+longjmp_address = 0x82BD8590

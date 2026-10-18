@@ -1,0 +1,111 @@
+# Entry points of the statically linked XDK 2.0.20871 d3d9ltcg / xgraphics libraries, named so src/gpu/hooks/ can REX_HOOK them.
+# Signatures are LTCG clones, not the XDK prototypes; see docs/reverse-engineering/guest-d3d.md.
+
+[functions]
+0x829DF440 = { name = "D3DResource_Destroy", size = 0x2F4 }  # confirmed: called by Release at refcount 0; jump table on Common&0xF type, frees through the physical-memory allocator sub_82BF5368
+0x829DFC70 = { name = "D3DResource_AddRef", size = 0x74 }  # confirmed: lwarx/stwcx ++(res+4); recurses to parent (Common&0x40000000 → res+0x18)
+0x829DFCE8 = { name = "D3DResource_Release", size = 0x80 }  # confirmed: atomic --(res+4); 0 → D3DResource_Destroy; 92 external callers
+0x829DFD68 = { name = "D3DResource_GetDevice", size = 0x78 }  # confirmed: reads VdGlobalDevice, ++device+0x3C, *out = device
+0x829DFDE0 = { name = "D3DResource_GetType", size = 0x8C }  # confirmed: Common&0xF plus Volume16/VolumeTex17/Cube18/Array19/Line20 from fetch dim bits
+0x829DFE70 = { name = "D3DResource_IsSet", size = 0xEC }  # confirmed: compares the resource against device stream/IB/RT/DS/texture/shader slots
+0x829E10C0 = { name = "D3DDevice_SetRenderState_AlphaBlendEnable", size = 0x80 }  # confirmed: dev+0x2FFC bit31; FALSE writes 0x10001 (ONE/ZERO/ADD) to RB_BLENDCONTROL0-3
+0x829E11E0 = { name = "D3DDevice_SetRenderState_SrcBlend", size = 0x7C }  # confirmed: dev+0x2FF8 bits0-4; UE3 splash passes 6 (SRCALPHA)
+0x829E1270 = { name = "D3DDevice_SetRenderState_DestBlend", size = 0x7C }  # confirmed: dev+0x2FF8 bits8-12; UE3 splash passes 7 (INVSRCALPHA)
+0x829E1450 = { name = "D3DDevice_SetRenderState_SeparateAlphaBlendEnable", size = 0x84 }  # confirmed: dev+0x2FFC bit30, rebuilds RB_BLENDCONTROL0-3
+0x829E1B38 = { name = "D3DDevice_SetRenderState_ScissorTestEnable", size = 0xC }  # confirmed: dev+0x3000 = v; tail-calls SetScissorRect(dev, dev+0x32FC)
+0x829E1B50 = { name = "D3DDevice_SetRenderState_SlopeScaleDepthBias", size = 0xA8 }  # confirmed: value*16 → dev+0x2A50/0x2A58, poly-offset enables in PA_SU_SC_MODE_CNTL (dev+0x2948)
+0x829E1C18 = { name = "D3DDevice_SetRenderState_DepthBias", size = 0x9C }  # confirmed: → dev+0x2A54/0x2A5C, same enable bits
+0x829E28F8 = { name = "D3DDevice_SetSamplerState_MinFilter", size = 0xC8 }  # confirmed: fetch dword3 bits21-22 + aniso bits25-27 at dev+0x480+24*s
+0x829E2AA0 = { name = "D3DDevice_SetSamplerState_MagFilter", size = 0xC8 }  # confirmed: fetch dword3 bits19-20 + aniso
+0x829E2D40 = { name = "D3DDevice_SetSamplerState_MaxAnisotropy", size = 0x68 }  # confirmed: byte dev+0x2A70+s, aniso bits25-27 via table 0x821A5598
+0x829E2E60 = { name = "D3DDevice_SetSamplerState_MipMapLodBias", size = 0x60 }  # confirmed: (float*32) → fetch dword4 bits12-21
+0x829E2F08 = { name = "D3DDevice_SetSamplerState_MaxMipLevel", size = 0x6C }  # confirmed: byte dev+0x3044+s, fetch dword4 bits2-5 clamped to texture
+0x829E2F88 = { name = "D3DDevice_SetSamplerState_MinMipLevel", size = 0x6C }  # confirmed: byte dev+0x305E+s, fetch dword4 bits6-9
+0x829E3328 = { name = "D3DDevice_SetScissorRect", size = 0xF8 }  # confirmed: RECT → dev+0x32FC..0x3308, PA_SC_WINDOW_SCISSOR_TL/BR shadow dev+0x28C4/0x28C8
+0x829E3420 = { name = "D3DDevice_SetViewport", size = 0x7C }  # confirmed: D3DVIEWPORT9* → int→float → sub_829E0DC8 (VPORT scale/offset regs dev+0x2908..0x291C)
+0x829E34A0 = { name = "D3DDevice_SetStreamSource", size = 0x120 }  # confirmed: VB → dev+0x3224+4n, stride>>2 → byte dev+0x3268+n, vertex fetch const dev+0x778-8n
+0x829E35C0 = { name = "D3DDevice_SetIndices", size = 0x90 }  # confirmed: dev+0x320C = IB (fence-tags the old one)
+0x829E3650 = { name = "D3DDevice_SetRenderTarget", size = 0x390 }  # confirmed: dev+0x3210+4*idx; RB_COLORn_INFO from surf+0x1C
+0x829E39E0 = { name = "D3DDevice_SetDepthStencilSurface", size = 0x2D8 }  # confirmed: dev+0x3220; RB_DEPTH_INFO dev+0x2888 = surf+0x1C
+0x829E3CB8 = { name = "D3DDevice_SetGammaRamp", size = 0xCC }  # confirmed: D3DGAMMARAMP → 1536-byte PWL at dev+0x3C30 (sub_829F4FD8), sets the dev+0x42DC|=2 dirty bit Swap consumes
+0x829E4AD0 = { name = "D3DTexture_GetLevelDesc", size = 0x100 }  # confirmed: fills D3DSURFACE_DESC {Format,Type,0,0,0,0,W,H}
+0x829E4BD0 = { name = "D3DVolumeTexture_GetLevelDesc", size = 0x100 }  # confirmed: D3DVOLUME_DESC variant (W,H,D)
+0x829E5988 = { name = "D3DTexture_GetSurfaceLevel", size = 0xD0 }  # confirmed: allocs a 48-byte child surface (type 4|0x40000000), parent at +0x18, level<<28 at +0x1C
+0x829E5A58 = { name = "D3DCubeTexture_GetCubeMapSurface", size = 0xB4 }  # confirmed: same with face<<22
+0x829E5B18 = { name = "D3DVolumeTexture_GetVolumeLevel", size = 0xC4 }  # confirmed: 32-byte child volume
+0x829E5BE8 = { name = "D3DDevice_CreateTexture", size = 0x120 }  # confirmed: (W,H,Depth,Levels,Usage,Format,Pool,Type) → 52-byte texture + physical alloc; no device arg (as reblue)
+0x829E5D08 = { name = "D3DDevice_CreateSurface", size = 0x164 }  # confirmed: (W,H,Format,MultiSample,pParameters) → 48-byte surface + EDRAM tiles (sub_829F4A30, 0x800-tile limit)
+0x829E5E70 = { name = "D3DSurface_GetDesc", size = 0x98 }  # confirmed: from surf+0x24 size bits / parent GetLevelDesc
+0x829E5F08 = { name = "D3DSurface_LockRect", size = 0x20 }  # confirmed: forwards to parent LockRect(face=(+0x1C>>22)&0x3F, level=+0x1C>>28)
+0x829E5F28 = { name = "D3DVolume_GetDesc", size = 0x44 }  # confirmed: parent VolumeTexture_GetLevelDesc, Type=16
+0x829E5F70 = { name = "D3DVolume_LockBox", size = 0x1C }  # confirmed: parent LockBox
+0x829E5FA8 = { name = "D3DDevice_SetTexture", size = 0x18C }  # confirmed: dev+0x3278+4s = tex; builds fetch const at dev+0x480+24s from tex+0x1C..0x33
+0x829E65B8 = { name = "D3DDevice_SetVertexShaderConstantFN", size = 0xD8 }  # confirmed: copies float4s to dev+0x780+16*reg, ORs mask into u64 dev+0x00
+0x829E6690 = { name = "D3DDevice_SetPixelShaderConstantFN", size = 0xD8 }  # confirmed: dev+0x1780+16*reg, mask into u64 dev+0x08
+0x829E67A0 = { name = "D3DDevice_SetPixelShader", size = 0x1BC }  # confirmed: dev+0x330C; replays the shader's {u16 off,u16 count} register table into dev+0x480
+0x829E6960 = { name = "XGRegisterVertexShader", size = 0xF8 }  # confirmed: memset 872 bytes, type 6, same size as reblue's XGRegisterVertexShader
+0x829E6A58 = { name = "D3DDevice_SetVertexShader", size = 0x1CC }  # confirmed: dev+0x3310; same table replay (shader+0x37C)
+0x829E6D18 = { name = "D3DDevice_SetShaderGPRAllocation", size = 0xE8 }  # confirmed: (dev,Flags,VS,PS) defaults 64/64, writes SQ_PROGRAM/GPR regs
+0x829E6E00 = { name = "D3DDevice_BeginVertices", size = 0x4BC }  # confirmed: DRAW_INDX (0x22) immediate; vertex data from secondary ring; resume ptr → dev+0x3614
+0x829E72C0 = { name = "D3DDevice_DrawVerticesUP", size = 0x48 }  # confirmed: BeginVertices + memcpy(count*stride) + inline EndVertices (dev+0x30 = dev+0x3614)
+0x829E7308 = { name = "D3DDevice_BeginIndexedVertices", size = 0x540 }  # confirmed: matches the XDK 9-arg prototype; returns E_OUTOFMEMORY 0x8007000E on failure
+0x829E7848 = { name = "D3DDevice_DrawVertices", size = 0x414 }  # confirmed: (dev,Prim,StartVertex,VertexCount); VGT_INDX_OFFSET=StartVertex, DRAW_INDX auto-index, splits >0xFFFF
+0x829E7C60 = { name = "D3DDevice_DrawIndexedVertices", size = 0x474 }  # confirmed: LTCG clone (dev,Prim,StartIndex,IndexCount); reads IB dev+0x320C; BaseVertexIndex folded to 0
+0x829E9B68 = { name = "D3D_CDevice_KickOff", size = 0x100 }  # confirmed: the "write ptr > soft end" handler at 121 internal sites; submits segment, returns new dev+0x30
+0x829E9C68 = { name = "D3D_CDevice_BlockOnFence", size = 0xF4 }  # confirmed: (dev,fence,reason,flag); spins on *(dev+0x2B10) vs dev+0x2B1C
+0x829EA078 = { name = "D3DDevice_BlockUntilIdle", size = 0x7C }  # confirmed: WAIT_UNTIL(0x5C8)=0x20000, BlockOnFence(dev+0x2B1C,4), spins on dev+0x2B90
+0x829EA0F8 = { name = "D3DDevice_BlockOnFence", size = 0x64 }  # confirmed: (Fence) only, gets the device from VdGlobalDevice, reason 6
+0x829EA160 = { name = "D3DDevice_IsFencePending", size = 0x90 }  # confirmed: (Fence) → KickOff if fence==current, return (cur-f) < (cur-*readback)
+0x829EA1F0 = { name = "D3DDevice_SetRingBufferParameters", size = 0x3F8 }  # confirmed: VdInitializeRingBuffer, VdEnableRingBufferRPtrWriteBack(readback+0x3C)
+0x829EA918 = { name = "D3DDevice_SynchronizeToPresentationInterval", size = 0x1E0 }  # confirmed: present interval from dev+0x2FFC bits23-29, vblank-callback packet (sub_829EA768 flips D1GRPH 0x7FC86110); midasm hook 0x829EAA14 is inside it
+0x829EB660 = { name = "D3DDevice_Swap", size = 0x834 }  # confirmed: (dev, pFrontBuffer, pScalerParams); VdGetSystemCommandBuffer + VdSwap at 0x829EBA3C (midasm hook), ++frame dev+0x4248
+0x829EE800 = { name = "Direct3D_CreateDevice", size = 0xE8 }  # confirmed: LTCG clone (pPresentParams); allocs 0x6100, aligns 128 (sizeof 0x6080), → sub_829FC210, stores to 0x8332FDDC
+0x829EE8E8 = { name = "D3DDevice_Release", size = 0x84 }  # confirmed: --dev+0x3C; 0 → sub_829FC4F8 (VdShutdownEngines) + free
+0x829EEB58 = { name = "D3DDevice_GetDeviceCaps", size = 0x14 }  # confirmed: memcpy(pCaps, 0x821A5868, 304)
+0x829EED38 = { name = "D3DQuery_Release", size = 0x260 }  # confirmed: --q+0xC; frees occlusion (9) / screen-extent (10) slots
+0x829EEF98 = { name = "D3DQuery_Issue", size = 0x2B0 }  # confirmed: flags 2=BEGIN 1=END; types 8 event/9 occlusion/10 screen extent; stamps q+0x18 = dev+0x2B1C
+0x829EF248 = { name = "D3DQuery_GetData", size = 0x360 }  # confirmed: LTCG clone (pQuery, pData); byte-swaps the ZPASS counters from memory; S_FALSE while the fence is pending
+0x829F2468 = { name = "D3DDevice_ClearF", size = 0x134 }  # confirmed: LTCG clone (dev,Flags,pRect,pColor,Z) → sub_829F1DF0 rect-list clear; 22 inlined-Clear callers
+0x829F2BA8 = { name = "D3DDevice_Resolve", size = 0x1048 }  # confirmed: LTCG clone; UE3 present calls (dev,0,0,FrontBufferTex,0,0,0,0.0)
+0x829F3D10 = { name = "D3DDevice_SetPredication", size = 0x170 }  # confirmed: dev+0x331C mask, type-3 SET_CONSTANT predicate packet 0xC0002100
+0x829F3E80 = { name = "D3DDevice_BeginTiling", size = 0x354 }  # confirmed: LTCG clone (dev,Flags,Count,pTileRects,ClearZ); tile rects → dev+0x3348.., ClearF(63)
+0x829F41D8 = { name = "D3DDevice_EndTiling", size = 0x344 }  # confirmed: LTCG clone (dev) only; predicated replay of the tiling command buffer
+0x82A01BB8 = { name = "XGUntileSurface", size = 0x4 }  # confirmed: thunk → 0x82A016D0; used by RHIReadSurfaceData (dst,pitch,pPoint,src,w,h,pRect,texelPitch)
+0x82A01BC0 = { name = "XGSetVertexBufferHeader", size = 0x94 }  # confirmed: (Length,Usage,Pool,BaseOffset,pVB): Common=1, +0x18=addr|3, +0x1C=len|0x10000002
+0x82A01C58 = { name = "XGSetIndexBufferHeader", size = 0x90 }  # confirmed: (Length,Usage,Format,Pool,BaseOffset,pIB): Common=2|fmt<<29
+0x82A02048 = { name = "XGOffsetResourceAddress", size = 0xD4 }  # confirmed: per-type base-address patch (VB +0x18, tex via 0x82A01FE0, shader +0x20)
+0x829E8940 = { name = "D3D_RingBufferDeviceAllocate", size = 0x230 }  # confirmed: (dev, flags, pSize, align); flag 1 carves data from the secondary ring, else a command segment; waits in BlockOnSecondaryPosition; reached by AllocateRingData and StartNewSegment when dev+0x3660 is null
+0x829E8EF0 = { name = "D3D_CDevice_BlockOnPrimaryRange", size = 0xC8 }  # confirmed: (dev, pos, size) -> (pos+size) & dev+0x3BC8; spins while the write would pass the RPtr write-back at readback+0x3C
+0x829E6768 = { name = "XGRegisterPixelShader", size = 0x38 }  # confirmed: the pixel-shader twin of XGRegisterVertexShader; only XePixelShader_Create calls it
+0x829EE1B0 = { name = "D3DVertexShader_Bind", size = 0x184 }  # confirmed: (vs, decl, strides[], ps); sub_829EC9C0 patches each vfetch from the decl type (format bits 0..5, signed bit 8, integer bit 9, swizzle bits 10..21, 16-bit selectors XOR 1); only caller UE3 0x82982EA8
+0x829E8FB8 = { name = "D3D_CDevice_WritePrimary", size = 0x118 }  # confirmed: (dev, const DWORD* packets, DWORD count) copies count dwords into the primary ring at index dev+0x2B50, base dev+0x3BC4, mask dev+0x3BC8, after BlockOnPrimaryRange
+0x829E22D8 = { name = "D3DDevice_SetRenderState_HighPrecisionBlendEnable", size = 0x90 }  # confirmed: render-state table 0x832B3198; caches dev+0x3078, toggles RT0 Color0Info format 2<->0xA, 3<->0xC
+0x829E2370 = { name = "D3DDevice_SetRenderState_HighPrecisionBlendEnable1", size = 0x90 }  # confirmed: the RT1 twin (dev+0x307C, Color1Info 0x288C)
+0x829E6C28 = { name = "XGSetVertexDeclarationHeader", size = 0xEC }  # confirmed: (elements, decl); count +0x18, max stream +0x1C, used streams +0x20, elements +0x34; UE3 inlines CreateVertexDeclaration around it
+0x829E8B70 = { name = "D3D_CDevice_AllocateRingData", size = 0x1A0 }  # confirmed: (dev, dwords, alignment) -> data carved from the custom allocator's fixed buffer at +0x98/+0x9C, else D3D_RingBufferDeviceAllocate
+0x829DF738 = { name = "D3D_LockResource", size = 0x31C }  # confirmed: (res, reason, isMip, base, mip, lockAddr, lockSize, flags, [stack] coherency) -> lockAddr; fence wait, lock count Common += 0x100, flush-range widening
+0x829DFA58 = { name = "D3D_UnlockResource", size = 0x158 }  # confirmed: (res, base, mip); resets the flush ranges +0x14/+0x18 to 0xFFFF0000 and drops the lock count
+0x829F4C30 = { name = "D3D_FlushCachedRange", size = 0xA8 }  # confirmed: (start, end) -> start; dcbf over 128-byte lines, no guest-visible effect
+0x829E0790 = { name = "D3D_InvalidateGpuCacheRange", size = 0x198 }  # confirmed: (addr, size); with 0x833549DC always 0 it only sets dev+0x2FE0 = 1
+0x829EEC98 = { name = "D3DDevice_CreateOcclusionQuery", size = 0x9C }  # confirmed: (dev) -> D3DQuery*; 0x9C-byte query, type 9, slots from sub_829EEB70; only caller UE3 0x827D81C0
+0x829EE970 = { name = "D3DDevice_FlushHiZStencil", size = 0x64 }  # likely: (dev); EVENT_WRITE 15 and clears bit 0x04 of byte dev+0x2B3D; called after UE3 toggles HiControl
+0x829F4798 = { name = "D3DDevice_QueryBufferSpace", size = 0x154 }  # confirmed: (dev, DWORD* used, DWORD* remaining); UE3's tiled DrawUP path tests size <= remaining
+0x829E80D8 = { name = "D3DDevice_DrawTessellatedVertices", size = 0x4A0 }  # likely: (dev, prim, start, count); UE3 RHIDrawPrimitive sends its primitive 4 here as prim 0x12
+0x829E0440 = { name = "D3D_BeginMemExport", size = 0x11C }  # confirmed: (dev, res); export address to dev+0x2898; only reached from hooked GpuMemmove and Swap
+0x829E0560 = { name = "D3D_EndMemExport", size = 0x230 }  # confirmed: (dev, res) -> dev+0x30; fences the resource; only reached from hooked GpuMemmove and Swap
+0x829E3E58 = { name = "D3DDevice_SetBlendState", size = 0x58 }  # confirmed: (dev, rtIndex, blendState); BlendControl0 or BlendControl1..3, dirty bit; UE3 sub_8297CCD8
+0x829E3EB0 = { name = "XGGetBlockDimensions", size = 0x98 }  # confirmed: (fmt, pW, pH) -> fmt; 4x1, 2x1, 4x4 or 1x1 blocks
+0x829E3F48 = { name = "XGCalcMipLevelCount", size = 0x84 }  # confirmed: levels from the largest unbordered dimension
+0x829E3FD0 = { name = "XGPadMipLevel", size = 0x120 }  # confirmed: (pW, pH, pD, bpp, fmt, dim, tiled) -> level bytes
+0x829E40F0 = { name = "XGCalcTextureLayout", size = 0x380 }  # confirmed: (W, H, D, levels, fmt, dim, tiled, packed, border, expBias, pitch, pAlignedW, pBase, pMip) -> levels
+0x829E4508 = { name = "XGGetFetchConstantDimensions", size = 0xA0 }  # confirmed: (fetch, pW, pH, pD) -> fetch; the sub_829E4470 decode on a bare fetch constant
+0x829E45A8 = { name = "XGGetMipTailLevelOffset", size = 0x158 }  # confirmed: (level, w, h, d, rowPitch, slicePitch, fmt, pX, pY, pZ) -> byte offset
+0x829E4CD0 = { name = "D3DBaseTexture_GetMipLayout", size = 0x480 }  # confirmed: (tex, face, level, pPitch, pSlice, pSize, pTail, pW, pH, pD, pAddress)
+0x829E5150 = { name = "D3DBaseTexture_LockLevel", size = 0xC0 }  # confirmed: (tex, face, level, flags, pAddr, pPitch, pSlice, pTail) -> lock address
+0x829E5210 = { name = "D3DBaseTexture_LockRect", size = 0x8C }  # confirmed: (tex, face, level, pLockedRect, pRect, flags); UE3 0x82980B54
+0x829E52A0 = { name = "D3DVolumeTexture_LockBox", size = 0xA8 }  # confirmed: (tex, level, pLockedBox, pBox, flags)
+0x829E5348 = { name = "XGSetTextureHeaderInternal", size = 0x2F4 }  # confirmed: (type, W, H, D, levels, usage, format, packed, border, expBias, pitch, pTex, pBase, pMip)
+0x829E58B0 = { name = "D3DBaseTexture_GetLevelCount", size = 0x10 }  # confirmed: ((tex+0x2C >> 6) & 0xF) + 1
+0x829E58C0 = { name = "D3DBaseTexture_LockTail", size = 0xC8 }  # confirmed: (tex, arrayIndex, pLockedTail, flags)
+0x829E5F90 = { name = "D3DSurface_UnlockRect", size = 0x18 }  # confirmed: unlocks the surface's parent texture
+0x829E4470 = { name = "D3DBaseTexture_GetDimensions", size = 0x98 }  # confirmed: (tex, pW, pH, pD) -> tex; 1D 24 bits, 3D 11:11:10, otherwise 13:13, plus one (three with a border)
