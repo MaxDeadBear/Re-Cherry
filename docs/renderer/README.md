@@ -36,6 +36,10 @@ The `Lollipop/Graphics` cvars, which the options screen's GRAPHICS page also set
 | `cherry_gfx_ultrawide` | 21 or 32 renders 21:9 or 32:9 (next launch). `XeInitD3DDevice` sizes the back buffer 720 lines tall and at most 1280 wide; two midasm hooks (`config/hooks/display.toml`) widen it and keep the 16:9 shadow-buffer budget instead of the 4:3 one. The camera is made hor+ in `src/engine/widescreen.cpp`: gameplay's `FPerspectiveMatrix_FOVXY` keeps the console's vertical FOV, and cameras that constrain their aspect, which the viewport would otherwise stretch because it always reports a desired 16:9, get their horizontal term narrowed in the main view (scene captures keep theirs). The HUD movies anchor to the wider edges by themselves. |
 | `cherry_gfx_shadow_resolution` | 256, 512 or 1024 raise the game's character shadow maps from its ini's `MaxShadowResolution=128` (next launch; `src/engine/shadows.cpp`). A per-object shadow is projected radius x `ShadowTexelsPerPixel` clamped to that maximum and rounded down to a power of two, so the texels-per-pixel factor is scaled with it; both are re-asserted every tick. |
 
+## Memory
+
+The per-frame upload slices (vertices, indices, constant blocks, texture staging) start at 64 MB each and grow to 1.25x what a heavier frame asked for, up to 1 GB, when one runs out; after 600 frames that each need under a quarter of the smallest slice they shrink back to twice that stretch's peak (`GraphicsSystem::FitUploadBuffer`). A frame that runs out skips what did not fit, which happens on area loads; the frames after it fit. Constant blocks take only the registers their shaders read, rounded to D3D12's 256 bytes, while keeping the 4 KB a root constant buffer could reach inside the slice.
+
 ## Pipelines and constants
 
 Draw pipelines are described by plain data (`src/gpu/draw/pipeline_state.h`), hashed, and cached in a hash map. Every pipeline built for the first time is appended to `pipelines.bin` beside the config, and at the next launch background threads build all of them while the game boots (`src/gpu/draw/pipeline_cache.cpp`), so a pipeline stalls a frame only the first time it is ever seen.

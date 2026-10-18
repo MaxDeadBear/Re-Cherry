@@ -24,10 +24,13 @@ inline constexpr uint32_t kShaderIndexedVertexFetch = 1u << 6;
 extern ShaderCacheEntry g_shaderCacheEntries[];
 extern const size_t g_shaderCacheEntryCount;
 
-// zstd-compressed, or stored verbatim when the compressed size equals the decompressed size; the DXIL blob is raw DXIL, the SPIR-V blob is smol-v per entry.
+// Each entry's DXIL, and its SPIR-V as smol-v, is one zstd frame at its offset and size, so a shader is decompressed only when the game creates it.
 extern const uint8_t g_compressedDxilCache[];
 extern const size_t g_dxilCacheCompressedSize;
-extern const size_t g_dxilCacheDecompressedSize;
 extern const uint8_t g_compressedSpirvCache[];
 extern const size_t g_spirvCacheCompressedSize;
-extern const size_t g_spirvCacheDecompressedSize;
+// The zstd dictionaries the frames were compressed with; empty when none was trained.
+extern const uint8_t g_dxilCacheDictionary[];
+extern const size_t g_dxilCacheDictionarySize;
+extern const uint8_t g_spirvCacheDictionary[];
+extern const size_t g_spirvCacheDictionarySize;

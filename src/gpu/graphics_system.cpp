@@ -418,7 +418,8 @@ void GraphicsSystem::Present(DrawFrame& draws, const TextureFetch& front_buffer)
   list->begin();
   // Before the render pass opens: the first call records the placeholder texture uploads, and the frame's textures upload here too.
   if (EnsureDrawResources(list)) {
-    ring_ = UploadRing{upload_[frame_slot_].get(), upload_mapped_[frame_slot_], kUploadBytes, 0};
+    FitUploadBuffer(frame_slot_);
+    ring_ = UploadRing{upload_[frame_slot_].get(), upload_mapped_[frame_slot_], upload_bytes_[frame_slot_], 0};
     textures_.BeginFrame(frame_index_);
     {
       debug::ScopedFrameTimer timer(debug::TimingPhase::Textures);
@@ -503,7 +504,7 @@ plume::RenderShader* GraphicsSystem::ShaderModule(const ShaderCacheEntry* entry)
   std::lock_guard<std::mutex> lock(shader_mutex_);
   auto [found, inserted] = shader_modules_.try_emplace(entry);
   if (inserted) {
-    const std::span<const uint8_t> blob = using_vulkan_ ? ShaderSpirv(entry) : ShaderDxil(entry);
+    const std::vector<uint8_t> blob = using_vulkan_ ? ShaderSpirv(entry) : ShaderDxil(entry);
     // XenosRecomp emits "main" for both stages.
     if (!blob.empty()) found->second = device_->createShader(blob.data(), blob.size(), "main", using_vulkan_ ? plume::RenderShaderFormat::SPIRV : plume::RenderShaderFormat::DXIL);
     if (!found->second) REXGPU_WARN("[gfx] shader {:016X} has no loadable {} module", entry->hash, using_vulkan_ ? "SPIR-V" : "DXIL");

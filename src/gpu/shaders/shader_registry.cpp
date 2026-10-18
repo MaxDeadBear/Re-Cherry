@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <format>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -42,10 +43,6 @@ uint32_t g_hits = 0;
 uint32_t g_misses = 0;
 uint32_t g_rejected = 0;
 
-std::once_flag g_blobs_once;
-std::vector<uint8_t> g_dxil;
-std::vector<uint8_t> g_spirv_smolv;
-std::unordered_map<const ShaderCacheEntry*, std::vector<uint8_t>> g_spirv;
 
 const ShaderCacheEntry* FindEntry(uint64_t hash) {
   const ShaderCacheEntry* begin = g_shaderCacheEntries;
@@ -61,26 +58,29 @@ void DumpContainer(const uint8_t* data, size_t size, uint64_t hash) {
   std::ofstream(g_dump_directory / std::format("{:016X}.bin", hash), std::ios::binary).write(reinterpret_cast<const char*>(data), std::streamsize(size));
 }
 
-std::vector<uint8_t> Decompress(const uint8_t* data, size_t compressed, size_t decompressed) {
-  std::vector<uint8_t> out(decompressed);
-  if (compressed == 0) return out;
-  if (compressed == decompressed) {
-    std::copy_n(data, decompressed, out.data());
-    return out;
+// One entry's zstd frame from a cache blob, or nothing when it does not decompress.
+std::vector<uint8_t> Decompress(const uint8_t* blob, size_t blob_size, uint32_t offset, uint32_t size, const uint8_t* dictionary, size_t dictionary_size) {
+  if (!size || size_t(offset) + size > blob_size) return {};
+  const unsigned long long length = ZSTD_getFrameContentSize(blob + offset, size);
+  if (length == ZSTD_CONTENTSIZE_ERROR || length == ZSTD_CONTENTSIZE_UNKNOWN) return {};
+  std::vector<uint8_t> out(static_cast<size_t>(length));
+  // The dictionary is digested once per kind; handing zstd its raw bytes would redo that for every shader.
+  static std::mutex dictionaries_mutex;
+  static std::unordered_map<const uint8_t*, std::unique_ptr<ZSTD_DDict, decltype(&ZSTD_freeDDict)>> dictionaries;
+  const ZSTD_DDict* prepared = nullptr;
+  if (dictionary_size) {
+    std::lock_guard lock(dictionaries_mutex);
+    auto [found, inserted] = dictionaries.try_emplace(dictionary, nullptr, &ZSTD_freeDDict);
+    if (inserted) found->second.reset(ZSTD_createDDict(dictionary, dictionary_size));
+    prepared = found->second.get();
   }
-  const size_t written = ZSTD_decompress(out.data(), out.size(), data, compressed);
-  if (ZSTD_isError(written) || written != decompressed) {
-    REXGPU_ERROR("[gfx] shader cache blob failed to decompress ({})", ZSTD_isError(written) ? ZSTD_getErrorName(written) : "size mismatch");
-    out.clear();
+  thread_local std::unique_ptr<ZSTD_DCtx, decltype(&ZSTD_freeDCtx)> context(ZSTD_createDCtx(), &ZSTD_freeDCtx);
+  const size_t written = prepared ? ZSTD_decompress_usingDDict(context.get(), out.data(), out.size(), blob + offset, size, prepared) : ZSTD_decompressDCtx(context.get(), out.data(), out.size(), blob + offset, size);
+  if (ZSTD_isError(written) || written != out.size()) {
+    REXGPU_ERROR("[gfx] shader cache entry failed to decompress ({})", ZSTD_isError(written) ? ZSTD_getErrorName(written) : "size mismatch");
+    return {};
   }
   return out;
-}
-
-void LoadBlobs() {
-  std::call_once(g_blobs_once, [] {
-    g_dxil = Decompress(g_compressedDxilCache, g_dxilCacheCompressedSize, g_dxilCacheDecompressedSize);
-    g_spirv_smolv = Decompress(g_compressedSpirvCache, g_spirvCacheCompressedSize, g_spirvCacheDecompressedSize);
-  });
 }
 
 }  // namespace
@@ -144,25 +144,18 @@ const ShaderCacheEntry* LookupShaderBinding(uint32_t object) {
   return found != g_bindings.end() ? found->second : nullptr;
 }
 
-std::span<const uint8_t> ShaderDxil(const ShaderCacheEntry* entry) {
-  if (!entry || entry->dxilSize == 0) return {};
-  LoadBlobs();
-  if (size_t(entry->dxilOffset) + entry->dxilSize > g_dxil.size()) return {};
-  return {g_dxil.data() + entry->dxilOffset, entry->dxilSize};
+std::vector<uint8_t> ShaderDxil(const ShaderCacheEntry* entry) {
+  if (!entry) return {};
+  return Decompress(g_compressedDxilCache, g_dxilCacheCompressedSize, entry->dxilOffset, entry->dxilSize, g_dxilCacheDictionary, g_dxilCacheDictionarySize);
 }
 
-std::span<const uint8_t> ShaderSpirv(const ShaderCacheEntry* entry) {
-  if (!entry || entry->spirvSize == 0) return {};
-  LoadBlobs();
-  if (size_t(entry->spirvOffset) + entry->spirvSize > g_spirv_smolv.size()) return {};
-  std::lock_guard<std::mutex> lock(g_mutex);
-  auto [found, inserted] = g_spirv.try_emplace(entry);
-  if (inserted) {
-    const uint8_t* smolv = g_spirv_smolv.data() + entry->spirvOffset;
-    found->second.resize(smolv::GetDecodedBufferSize(smolv, entry->spirvSize));
-    if (!smolv::Decode(smolv, entry->spirvSize, found->second.data(), found->second.size())) found->second.clear();
-  }
-  return found->second;
+std::vector<uint8_t> ShaderSpirv(const ShaderCacheEntry* entry) {
+  if (!entry) return {};
+  const std::vector<uint8_t> smolv_bytes = Decompress(g_compressedSpirvCache, g_spirvCacheCompressedSize, entry->spirvOffset, entry->spirvSize, g_spirvCacheDictionary, g_spirvCacheDictionarySize);
+  if (smolv_bytes.empty()) return {};
+  std::vector<uint8_t> spirv(smolv::GetDecodedBufferSize(smolv_bytes.data(), smolv_bytes.size()));
+  if (!smolv::Decode(smolv_bytes.data(), smolv_bytes.size(), spirv.data(), spirv.size())) return {};
+  return spirv;
 }
 
 const ShaderCacheEntry* FindShaderCacheEntry(uint64_t hash) {

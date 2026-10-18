@@ -14,11 +14,16 @@ struct UploadRing {
   uint8_t* mapped = nullptr;
   uint64_t capacity = 0;
   uint64_t used = 0;
+  // What the frame asked for and did not get, so the next frame's slice can be made big enough.
+  uint64_t overflow = 0;
 
   // The offset of `bytes` of space at `alignment`, or -1 when the frame's slice is full.
   int64_t Alloc(uint64_t bytes, uint64_t alignment) {
     const uint64_t offset = (used + alignment - 1) & ~(alignment - 1);
-    if (offset + bytes > capacity) return -1;
+    if (offset + bytes > capacity) {
+      overflow += bytes + alignment;
+      return -1;
+    }
     used = offset + bytes;
     return int64_t(offset);
   }

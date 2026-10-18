@@ -31,8 +31,8 @@ const ShaderCacheEntry* FindShaderCacheEntry(uint64_t hash);
 // The cache entry a bound guest shader object was created from, or null when it missed.
 const ShaderCacheEntry* LookupShaderBinding(uint32_t object);
 
-// The translated blobs for an entry, decompressed on first use; empty when the entry has none for that backend.
-std::span<const uint8_t> ShaderDxil(const ShaderCacheEntry* entry);
-std::span<const uint8_t> ShaderSpirv(const ShaderCacheEntry* entry);
+// An entry's translated bytecode, decompressed (and for SPIR-V smol-v decoded) now, for the caller to build its shader from and drop; empty when the entry has none for that backend.
+std::vector<uint8_t> ShaderDxil(const ShaderCacheEntry* entry);
+std::vector<uint8_t> ShaderSpirv(const ShaderCacheEntry* entry);
 
 }  // namespace cherry::gpu

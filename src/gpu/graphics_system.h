@@ -59,7 +59,9 @@ struct HostGeometry;
 struct SurfaceBinding;
 
 inline constexpr uint32_t kFramesInFlight = 2;
-inline constexpr uint64_t kUploadBytes = 256ull << 20;
+// Each frame's upload slice starts at this and grows to what a heavy frame (an area loading) needed, then shrinks back once frames are light again.
+inline constexpr uint64_t kMinUploadBytes = 64ull << 20;
+inline constexpr uint64_t kMaxUploadBytes = 1024ull << 20;
 inline constexpr uint32_t kSwapChainTextureCount = 3;
 
 void* NativeWindowHandle(rex::ui::Window* window);
@@ -257,6 +259,15 @@ class GraphicsSystem final : public rex::system::IGraphicsSystem {
   // One upload buffer per frame in flight, holding that frame's vertices, indices and constant blocks.
   std::unique_ptr<plume::RenderBuffer> upload_[kFramesInFlight];
   uint8_t* upload_mapped_[kFramesInFlight] = {};
+  uint64_t upload_bytes_[kFramesInFlight] = {};
+  // The largest demand (overflow included) a slice has not yet grown to, and the run of frames that needed under a quarter of the smallest slice with its peak.
+  uint64_t upload_grow_ = 0;
+  uint32_t upload_quiet_frames_ = 0;
+  uint64_t upload_quiet_peak_ = 0;
+  // (Re)creates a frame slot's upload slice at `bytes`; false when that fails.
+  bool CreateUploadBuffer(uint32_t slot, uint64_t bytes);
+  // Sizes the slot about to be used from recent demand; its previous frame has finished on the GPU.
+  void FitUploadBuffer(uint32_t slot);
   // Draw pipelines by PipelineKey; the precompile threads add to it too.
   std::atomic<float> picture_aspect_{16.0f / 9.0f};
   std::mutex pipeline_mutex_;

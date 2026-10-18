@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <iterator>
@@ -232,12 +233,7 @@ bool GraphicsSystem::EnsureDrawResources(plume::RenderCommandList* list) {
   }
 
   for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
-    upload_[slot] = device_->createBuffer(plume::RenderBufferDesc::UploadBuffer(kUploadBytes, plume::RenderBufferFlag::VERTEX | plume::RenderBufferFlag::INDEX | plume::RenderBufferFlag::CONSTANT | plume::RenderBufferFlag::DEVICE_ADDRESSABLE));
-    upload_mapped_[slot] = upload_[slot] ? static_cast<uint8_t*>(upload_[slot]->map()) : nullptr;
-    if (!upload_mapped_[slot]) {
-      REXGPU_ERROR("[gfx] upload buffer creation failed");
-      return false;
-    }
+    if (!CreateUploadBuffer(slot, kMinUploadBytes)) return false;
   }
 
   // White placeholders at descriptor 0 of every heap until textures are translated.
@@ -275,7 +271,7 @@ bool GraphicsSystem::EnsureDrawResources(plume::RenderCommandList* list) {
   if (blit_sampler_) draw_sets_[3]->setSampler(kBlitSampler, blit_sampler_.get());
   draw_failed_ = false;
   draw_ready_ = true;
-  REXGPU_INFO("[gfx] draw path ready ({} texture descriptors, {} MB upload per frame)", kMaxTextures, kUploadBytes >> 20);
+  REXGPU_INFO("[gfx] draw path ready ({} texture descriptors, {} MB upload per frame to start)", kMaxTextures, kMinUploadBytes >> 20);
   StartPipelinePrecompile();
   return true;
 }
@@ -374,6 +370,32 @@ std::unique_ptr<plume::RenderPipeline> GraphicsSystem::CreatePipeline(const Pipe
   }
 #endif
   return pipeline;
+}
+
+bool GraphicsSystem::CreateUploadBuffer(uint32_t slot, uint64_t bytes) {
+  if (upload_mapped_[slot]) upload_[slot]->unmap();
+  upload_mapped_[slot] = nullptr;
+  upload_[slot] = device_->createBuffer(plume::RenderBufferDesc::UploadBuffer(bytes, plume::RenderBufferFlag::VERTEX | plume::RenderBufferFlag::INDEX | plume::RenderBufferFlag::CONSTANT | plume::RenderBufferFlag::DEVICE_ADDRESSABLE));
+  upload_mapped_[slot] = upload_[slot] ? static_cast<uint8_t*>(upload_[slot]->map()) : nullptr;
+  upload_bytes_[slot] = upload_mapped_[slot] ? bytes : 0;
+  if (!upload_mapped_[slot]) REXGPU_ERROR("[gfx] upload buffer of {} MB could not be created", bytes >> 20);
+  return upload_mapped_[slot] != nullptr;
+}
+
+void GraphicsSystem::FitUploadBuffer(uint32_t slot) {
+  constexpr uint32_t kQuietFrames = 600;
+  uint64_t wanted = upload_bytes_[slot];
+  if (upload_grow_ > upload_bytes_[slot]) {
+    // Grown with headroom, so the frames after a heavy one fit too.
+    wanted = std::bit_ceil(upload_grow_ + upload_grow_ / 4);
+  } else if (upload_quiet_frames_ >= kQuietFrames && upload_bytes_[slot] > kMinUploadBytes) {
+    wanted = std::max(kMinUploadBytes, std::bit_ceil(upload_quiet_peak_ * 2));
+    upload_grow_ = 0;
+  }
+  wanted = std::clamp(wanted, kMinUploadBytes, kMaxUploadBytes);
+  if (wanted == upload_bytes_[slot]) return;
+  REXGPU_INFO("[gfx] upload slice {} resized from {} to {} MB", slot, upload_bytes_[slot] >> 20, wanted >> 20);
+  if (!CreateUploadBuffer(slot, wanted)) CreateUploadBuffer(slot, kMinUploadBytes);
 }
 
 plume::RenderPipeline* GraphicsSystem::DrawPipeline(const DrawRecord& record, uint32_t color_formats, uint32_t depth_format) {
@@ -701,13 +723,17 @@ void GraphicsSystem::ReplayFrame(plume::RenderCommandList* list, DrawFrame& fram
     std::memcpy(shared.vertex_texture_2d, record.texture_index + kPixelSamplers, sizeof(shared.vertex_texture_2d));
     std::memcpy(shared.vertex_sampler, record.sampler_index + kPixelSamplers, sizeof(shared.vertex_sampler));
     const uint8_t* arena = frame.arena.data();
-    // Each stage's block is bound whole, but only the registers its shader reads are filled.
+    // Each stage gets only the registers its shader reads; a root constant buffer has no size, so the block's whole 4 KB must still lie inside the buffer.
     const uint64_t vs_bytes = uint64_t(std::min(VertexConstantRegisters(record), 256u)) * 16;
     const uint64_t ps_bytes = uint64_t(std::min(PixelConstantRegisters(record), 256u)) * 16;
-    const int64_t vs = stage(nullptr, kConstantBlockBytes, kConstantAlign);
-    if (vs >= 0) std::memcpy(ring_.mapped + vs, arena + record.constants, vs_bytes);
-    const int64_t ps = stage(nullptr, kConstantBlockBytes, kConstantAlign);
-    if (ps >= 0) std::memcpy(ring_.mapped + ps, arena + record.constants + vs_bytes, ps_bytes);
+    auto constant_block = [&](const uint8_t* data, uint64_t bytes) -> int64_t {
+      const int64_t offset = stage(nullptr, std::max<uint64_t>(bytes, 16), kConstantAlign);
+      if (offset < 0 || uint64_t(offset) + kConstantBlockBytes > ring_.capacity) return -1;
+      std::memcpy(ring_.mapped + offset, data, bytes);
+      return offset;
+    };
+    const int64_t vs = constant_block(arena + record.constants, vs_bytes);
+    const int64_t ps = constant_block(arena + record.constants + vs_bytes, ps_bytes);
     const int64_t sh = stage(&shared, sizeof(shared), kConstantAlign);
     stage(nullptr, kSharedBlockBytes - sizeof(shared), 1);
     const HostGeometry* geometry = record.geometry.get();
@@ -772,6 +798,17 @@ void GraphicsSystem::ReplayFrame(plume::RenderCommandList* list, DrawFrame& fram
   }
 
   static uint64_t frames = 0;
+  // A frame's demand, overflow included, sizes the slices of the frames after it; a quiet stretch lets them shrink.
+  const uint64_t demand = ring_.used + ring_.overflow;
+  const uint64_t smallest = *std::min_element(std::begin(upload_bytes_), std::end(upload_bytes_));
+  if (demand > smallest) upload_grow_ = std::max(upload_grow_, demand);
+  if (demand < smallest / 4) {
+    ++upload_quiet_frames_;
+    upload_quiet_peak_ = std::max(upload_quiet_peak_, demand);
+  } else {
+    upload_quiet_frames_ = 0;
+    upload_quiet_peak_ = 0;
+  }
   if ((frames++ % 300) == 0) REXGPU_INFO("[gfx] frame {}: {} commands; {} draws, {} clears, {} resolves replayed; {} skipped, {} without pipeline, {} out of upload space; captured drops: {} without shader, {} without layout, {} other ({} KB uploaded)", frames, frame.draws.size(), drawn, cleared, resolved, skipped, no_pipeline, no_space, frame.dropped_no_shader, frame.dropped_no_layout, frame.dropped_other, ring_.used >> 10);
 }
 
