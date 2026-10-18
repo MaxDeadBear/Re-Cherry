@@ -7,11 +7,11 @@ The game's own options screen (pause menu or title, OPTION) gets two pages of gr
 | RESOLUTION | AUTO, 144P, 360P, 720P, 1080P, 1440P, 2160P | `cherry_gfx_render_height` (AUTO is 0, follow the window) |
 | ANTI-ALIASING | OFF, FXAA | `cherry_gfx_fxaa` |
 | TEXTURE FILTERING | DEFAULT, 2X, 4X, 8X, 16X | `cherry_gfx_anisotropy` |
-| ASPECT RATIO | ORIGINAL, STRETCH, 21:9 (RESTART), 32:9 (RESTART) | `cherry_gfx_stretch` and `cherry_gfx_ultrawide` together; the wide choices take effect at the next launch |
+| ASPECT RATIO | ORIGINAL, STRETCH, 21:9, 32:9 | `cherry_gfx_stretch` and `cherry_gfx_ultrawide` together |
 | DISPLAY MODE | WINDOWED, FULLSCREEN | `fullscreen` |
 | V-SYNC | OFF, ON | `cherry_gfx_vsync` |
 | FRAME RATE | 30 FPS, 60 FPS, UNCAPPED | `target_fps` (UNCAPPED is 0: every refresh with V-SYNC on, no limit with it off) |
-| SHADOW QUALITY | DEFAULT, 256, 512, 1024 (RESTART) | `cherry_gfx_shadow_resolution` |
+| SHADOW QUALITY | DEFAULT, 256, 512, 1024 | `cherry_gfx_shadow_resolution` |
 | FIELD OF VIEW | 90% to 130% | `cherry_gfx_fov`: both projection hooks in `src/engine/widescreen.cpp` scale the half-angle's tangent |
 | BRIGHTNESS | -2 to +2 | `cherry_gfx_brightness`: the final blit raises the picture to 1 - 0.1 x step |
 | SHARPENING | OFF, LOW, HIGH | `cherry_gfx_sharpen`: an unsharp mask over the four neighbours in the final blit |

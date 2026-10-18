@@ -8,7 +8,7 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
 
-REXCVAR_DEFINE_INT32(cherry_gfx_ultrawide, 0, "Lollipop/Graphics", "Render wider than 16:9: 21 for 21:9, 32 for 32:9, 0 keeps the console's 16:9; takes effect at the next launch.").range(0, 32).validator([](std::string_view v) { return v == "0" || v == "21" || v == "32"; });
+REXCVAR_DEFINE_INT32(cherry_gfx_ultrawide, 0, "Lollipop/Graphics", "Render wider than 16:9: 21 for 21:9, 32 for 32:9, 0 keeps the console's 16:9.").range(0, 32).validator([](std::string_view v) { return v == "0" || v == "21" || v == "32"; });
 
 REXCVAR_DEFINE_INT32(cherry_gfx_fov, 100, "Lollipop/Graphics", "Camera field of view as a percentage of the game's: 90 to 130.").range(70, 150);
 

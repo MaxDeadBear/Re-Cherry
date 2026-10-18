@@ -10,7 +10,7 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
 
-REXCVAR_DEFINE_INT32(cherry_gfx_shadow_resolution, 0, "Lollipop/Graphics", "Character shadow map size: 0 keeps the game's 128, 256, 512 or 1024 draw them that much sharper; takes effect at the next launch.").range(0, 1024).validator([](std::string_view v) { return v == "0" || v == "128" || v == "256" || v == "512" || v == "1024"; });
+REXCVAR_DEFINE_INT32(cherry_gfx_shadow_resolution, 0, "Lollipop/Graphics", "Character shadow map size: 0 keeps the game's 128, 256, 512 or 1024 draw them that much sharper.").range(0, 1024).validator([](std::string_view v) { return v == "0" || v == "128" || v == "256" || v == "512" || v == "1024"; });
 
 namespace {
 
