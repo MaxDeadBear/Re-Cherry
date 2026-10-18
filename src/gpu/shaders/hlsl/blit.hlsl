@@ -18,7 +18,9 @@ struct PushConstants {
 #define g_TextureIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 0)
 #define g_SamplerIndex vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 4)
 #define g_Fxaa vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + 8)
+#define g_Gamma vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 12)
 #define g_SourceRect vk::RawBufferLoad<float4>(g_PushConstants.SharedConstants + 16)
+#define g_Sharpen vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + 32)
 
 #else
 
@@ -27,9 +29,12 @@ cbuffer BlitConstants : register(b2, space4) {
     uint g_SamplerIndex;
     // 1 runs FXAA over the source while it is scaled.
     uint g_Fxaa;
-    float g_Padding;
+    // The exponent the picture is raised to: 1 as the game made it, below 1 brighter.
+    float g_Gamma;
     // Normalised source rectangle: xy the top-left corner, zw the size.
     float4 g_SourceRect;
+    // How much of the difference from the neighbours' average is added back, 0 for none.
+    float g_Sharpen;
 };
 
 #endif
@@ -131,6 +136,18 @@ float4 Fxaa(Texture2D<float4> source, SamplerState samplerState, float2 uv) {
 float4 PSMain(VSOutput input) : SV_Target {
     const float4 rect = g_SourceRect;
     const float2 uv = rect.xy + input.uv * rect.zw;
-    if (g_Fxaa != 0) return Fxaa(g_Texture2DDescriptorHeap[g_TextureIndex], g_SamplerDescriptorHeap[g_SamplerIndex], uv);
-    return g_Texture2DDescriptorHeap[g_TextureIndex].Sample(g_SamplerDescriptorHeap[g_SamplerIndex], uv);
+    Texture2D<float4> source = g_Texture2DDescriptorHeap[g_TextureIndex];
+    SamplerState samplerState = g_SamplerDescriptorHeap[g_SamplerIndex];
+    float4 color = g_Fxaa != 0 ? Fxaa(source, samplerState, uv) : source.Sample(samplerState, uv);
+    // Unsharp mask over the source's own texels: the four neighbours' average is the blur taken away.
+    if (g_Sharpen > 0.0) {
+        uint width, height;
+        source.GetDimensions(width, height);
+        const float2 texel = 1.0 / float2(width, height);
+        const float3 around = (source.SampleLevel(samplerState, uv + float2(texel.x, 0), 0).rgb + source.SampleLevel(samplerState, uv - float2(texel.x, 0), 0).rgb +
+                               source.SampleLevel(samplerState, uv + float2(0, texel.y), 0).rgb + source.SampleLevel(samplerState, uv - float2(0, texel.y), 0).rgb) * 0.25;
+        color.rgb = saturate(color.rgb + (color.rgb - around) * g_Sharpen);
+    }
+    if (g_Gamma != 1.0) color.rgb = pow(saturate(color.rgb), g_Gamma);
+    return color;
 }

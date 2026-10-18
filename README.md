@@ -16,7 +16,7 @@ HOW TO USE
 ----------------------------------
 The game looks for an `assets/` folder holding `default.xex` next to `re_cherry.exe` or in any folder above it, so a build in `out/build/relwithdebinfo/` finds the repository's `assets/` on its own. For a standalone copy, put `re_cherry.exe` (and the DLLs beside it) in a folder together with an `assets/` folder that contains the `AshGame` folder and `default.xex`. `--game_data_root=<path>` points it anywhere else.
 
-Settings are in the F4 overlay: Lollipop/Performance (`target_fps` 30/60), Lollipop/Costumes (costume slot swaps, mods go in `assets/SkinMods/`) and Lollipop/Patches (Xbox Live prompt skip). F12 toggles the FPS counter.
+Graphics settings are on the game's own options screen: press Y there for two GRAPHICS pages (docs/ui/option-menu.md). Everything is also in the F4 overlay: Lollipop/Graphics, Lollipop/Performance (`target_fps` 30/60/uncapped), Lollipop/Costumes (costume slot swaps, mods go in `assets/SkinMods/`) and Lollipop/Patches (Xbox Live prompt skip, `skip_startup_logos` for the five logo movies at boot). F12, or X on the options screen, toggles the FPS counter.
 
 CURRENT ISSUES WITH THE GAME
 --------------------------------------

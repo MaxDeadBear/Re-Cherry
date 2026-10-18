@@ -1,14 +1,19 @@
-// Appended to the options screen controller by src/ui/option_menu.cpp: Y, LB or RB flips its seven rows to a GRAPHICS page whose changes apply at once through CherryGfx_* calls (docs/ui/option-menu.md).
+// Appended to the options screen controller by src/ui/option_menu.cpp: Y, LB or RB flips its seven rows through two GRAPHICS pages whose changes apply at once through CherryGfx_* calls (docs/ui/option-menu.md).
 
 var cherryMc = this;
 var cherryPage = 0;
+var cherryPages = 3;
 var cherryRowCursor = [0, 1, 2, 8, 3, 4, 9];
 var cherryFocusNames = ["Vibration", "CameraUpDown", "CameraRL", "Aiming", "BGMVol", "SEVol", "Subtitle"];
 var cherryHits = ["hit_vib", "hit_camud", "hit_camrl", "hit_aim", "hit_bgm", "hit_se", "hit_sub"];
 var cherryOrigLabels = [but_vib, but_camud, but_camrl, but_aim, but_bgm, but_se, but_sub];
 var cherryOrigValues = [vib_vol, camud_vol, camrl_vol, aim_vol, bgm_vol, se_vol, sub_vol];
-var cherryNames = ["RESOLUTION", "ANTI-ALIASING", "TEXTURE FILTERING", "ASPECT RATIO", "DISPLAY MODE", "V-SYNC", "FRAME RATE"];
-var cherryChoices = [["AUTO", "144P", "360P", "720P", "1080P", "1440P", "2160P"], ["OFF", "FXAA"], ["DEFAULT", "2X", "4X", "8X", "16X"], ["ORIGINAL", "STRETCH", "21:9 (RESTART)", "32:9 (RESTART)"], ["WINDOWED", "FULLSCREEN"], ["OFF", "ON"], ["30 FPS", "60 FPS", "UNCAPPED"]];
+// Settings in CherryGfx_* row order: the first page's seven, then the second's.
+var cherryNames = ["RESOLUTION", "ANTI-ALIASING", "TEXTURE FILTERING", "ASPECT RATIO", "DISPLAY MODE", "V-SYNC", "FRAME RATE", "SHADOW QUALITY", "FIELD OF VIEW", "BRIGHTNESS", "SHARPENING", "SMOOTH MENUS", "FPS COUNTER", "RENDERER"];
+var cherryChoices = [["AUTO", "144P", "360P", "720P", "1080P", "1440P", "2160P"], ["OFF", "FXAA"], ["DEFAULT", "2X", "4X", "8X", "16X"], ["ORIGINAL", "STRETCH", "21:9 (RESTART)", "32:9 (RESTART)"], ["WINDOWED", "FULLSCREEN"], ["OFF", "ON"], ["30 FPS", "60 FPS", "UNCAPPED"], ["DEFAULT", "256 (RESTART)", "512 (RESTART)", "1024 (RESTART)"], ["90%", "100%", "110%", "120%", "130%"], ["-2", "-1", "0", "+1", "+2"], ["OFF", "LOW", "HIGH"], ["OFF", "ON"], ["OFF", "ON"], ["D3D12", "VULKAN (RESTART)"]];
+var cherrySettings = cherryNames.length;
+var cherryFpsSetting = 12;
+var cherryHints = ["Y  GRAPHICS     X  FPS COUNTER", "GRAPHICS 1/2     Y  MORE     X  FPS COUNTER", "GRAPHICS 2/2     Y  GAME     X  FPS COUNTER"];
 var cherryValue = [];
 var cherryBefore = [];
 var cherryLabels = [];
@@ -53,6 +58,12 @@ function cherrySetText(field, text, align)
    }
 }
 
+// The setting a row of the current graphics page shows.
+function cherrySetting(row)
+{
+   return (cherryPage - 1) * 7 + row;
+}
+
 function cherryRefresh()
 {
    if(cherryPage == 0)
@@ -62,15 +73,16 @@ function cherryRefresh()
    var i = 0;
    while(i < 7)
    {
-      cherrySetText(cherryField(cherryLabels[i]), cherryNames[i], "left");
-      cherrySetText(cherryField(cherryValues[i].cel), cherryChoices[i][cherryValue[i]], "center");
+      var s = cherrySetting(i);
+      cherrySetText(cherryField(cherryLabels[i]), cherryNames[s], "left");
+      cherrySetText(cherryField(cherryValues[i].cel), cherryChoices[s][cherryValue[s]], "center");
       i++;
    }
 }
 
 function cherryShow(i)
 {
-   cherryValues[i].SetChangeMode(cherryValue[i] != 0);
+   cherryValues[i].SetChangeMode(cherryValue[cherrySetting(i)] != 0);
    cherryRefresh();
 }
 
@@ -90,25 +102,26 @@ function cherryRowOfCursor()
 
 function cherryStep(i, delta)
 {
-   var n = cherryChoices[i].length;
-   cherryValue[i] = (cherryValue[i] + delta + n) % n;
+   var s = cherrySetting(i);
+   var n = cherryChoices[s].length;
+   cherryValue[s] = (cherryValue[s] + delta + n) % n;
    cherryShow(i);
-   flash.external.ExternalInterface.call("CherryGfx_Set", i, cherryValue[i]);
+   flash.external.ExternalInterface.call("CherryGfx_Set", s, cherryValue[s]);
 }
 
 function cherryLoad()
 {
-   var i = 0;
-   while(i < 7)
+   var s = 0;
+   while(s < cherrySettings)
    {
-      var v = Number(flash.external.ExternalInterface.call("CherryGfx_Get", i));
-      if(isNaN(v) || v < 0 || v >= cherryChoices[i].length)
+      var v = Number(flash.external.ExternalInterface.call("CherryGfx_Get", s));
+      if(isNaN(v) || v < 0 || v >= cherryChoices[s].length)
       {
          v = 0;
       }
-      cherryValue[i] = v;
-      cherryBefore[i] = v;
-      i++;
+      cherryValue[s] = v;
+      cherryBefore[s] = v;
+      s++;
    }
 }
 
@@ -125,15 +138,15 @@ function cherrySetPage(page)
    {
       cherryOrigLabels[i]._visible = page == 0;
       cherryOrigValues[i]._visible = page == 0;
-      cherryLabels[i]._visible = page == 1;
-      cherryValues[i]._visible = page == 1;
-      if(page == 1)
+      cherryLabels[i]._visible = page != 0;
+      cherryValues[i]._visible = page != 0;
+      if(page != 0)
       {
          cherryShow(i);
       }
       i++;
    }
-   cherrySetText(cherryHint, page == 0 ? "Y  GRAPHICS     X  FPS COUNTER" : "Y  GAME     X  FPS COUNTER", "left");
+   cherrySetText(cherryHint, cherryHints[page], "left");
    if(row >= 0)
    {
       bSeInit = false;
@@ -208,7 +221,7 @@ var cherryOrigSelect = SelectButton_Push;
 SelectButton_Push = function()
 {
    var row = cherryRowOfCursor();
-   if(cherryPage == 1 && bPush == false && row >= 0)
+   if(cherryPage != 0 && bPush == false && row >= 0)
    {
       flash.external.ExternalInterface.call("PlayMenuSoundCue", 1);
       cherryStep(row, 1);
@@ -222,11 +235,11 @@ var cherryOrigSetting = AllOptionSetting;
 AllOptionSetting = function()
 {
    cherryOrigSetting();
-   var i = 0;
-   while(i < 7)
+   var s = 0;
+   while(s < cherrySettings)
    {
-      flash.external.ExternalInterface.call("CherryGfx_Set", i, cherryValue[i]);
-      i++;
+      flash.external.ExternalInterface.call("CherryGfx_Set", s, cherryValue[s]);
+      s++;
    }
    flash.external.ExternalInterface.call("CherryGfx_Save");
 };
@@ -235,12 +248,12 @@ var cherryOrigCancel = AllOptionSetCancel;
 AllOptionSetCancel = function()
 {
    cherryOrigCancel();
-   var i = 0;
-   while(i < 7)
+   var s = 0;
+   while(s < cherrySettings)
    {
-      cherryValue[i] = cherryBefore[i];
-      flash.external.ExternalInterface.call("CherryGfx_Set", i, cherryValue[i]);
-      i++;
+      cherryValue[s] = cherryBefore[s];
+      flash.external.ExternalInterface.call("CherryGfx_Set", s, cherryValue[s]);
+      s++;
    }
    cherryRefresh();
 };
@@ -256,9 +269,10 @@ AllOptionSetDefault = function()
    var i = 0;
    while(i < 7)
    {
-      cherryValue[i] = Number(flash.external.ExternalInterface.call("CherryGfx_Default", i));
+      var s = cherrySetting(i);
+      cherryValue[s] = Number(flash.external.ExternalInterface.call("CherryGfx_Default", s));
       cherryShow(i);
-      flash.external.ExternalInterface.call("CherryGfx_Set", i, cherryValue[i]);
+      flash.external.ExternalInterface.call("CherryGfx_Set", s, cherryValue[s]);
       i++;
    }
 };
@@ -271,12 +285,22 @@ this.ProcessKeyDown = function(details, pathToFocus)
    {
       flash.external.ExternalInterface.call("PlayMenuSoundCue", 1);
       flash.external.ExternalInterface.call("CherryGfx_ToggleFps");
+      // The toggle is saved at once, so CANCEL keeps it too.
+      cherryValue[cherryFpsSetting] = 1 - cherryValue[cherryFpsSetting];
+      cherryBefore[cherryFpsSetting] = cherryValue[cherryFpsSetting];
+      cherryRefresh();
       return true;
    }
-   if(bPush == false && (nav == gfx.ui.NavigationCode.GAMEPAD_Y || nav == gfx.ui.NavigationCode.GAMEPAD_L1 || nav == gfx.ui.NavigationCode.GAMEPAD_R1))
+   if(bPush == false && (nav == gfx.ui.NavigationCode.GAMEPAD_Y || nav == gfx.ui.NavigationCode.GAMEPAD_R1))
    {
       flash.external.ExternalInterface.call("PlayMenuSoundCue", 1);
-      cherrySetPage(1 - cherryPage);
+      cherrySetPage((cherryPage + 1) % cherryPages);
+      return true;
+   }
+   if(bPush == false && nav == gfx.ui.NavigationCode.GAMEPAD_L1)
+   {
+      flash.external.ExternalInterface.call("PlayMenuSoundCue", 1);
+      cherrySetPage((cherryPage + cherryPages - 1) % cherryPages);
       return true;
    }
    return cherryOrigKeyDown.call(cherryMc, details, pathToFocus);
@@ -324,5 +348,5 @@ cherryHint.embedFonts = true;
 cherryHint.selectable = false;
 cherryHint.autoSize = "left";
 cherryHint.setNewTextFormat(new TextFormat("$AshUIFont01", 22, 16777215));
-cherrySetText(cherryHint, "Y  GRAPHICS     X  FPS COUNTER", "left");
+cherrySetText(cherryHint, cherryHints[0], "left");
 createEmptyMovieClip("cherryTick", 461).onEnterFrame = cherryRefresh;

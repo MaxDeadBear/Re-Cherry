@@ -34,6 +34,8 @@ REXCVAR_DEFINE_BOOL(cherry_gfx_vsync, true, "Lollipop/Graphics", "Wait for the d
 REXCVAR_DEFINE_INT32(cherry_gfx_render_height, 0, "Lollipop/Graphics", "Height the game is rendered at: 720 is the console's, 144/360 below it and 1080/1440/2160 above draw everything at that resolution, 0 follows the window.").range(0, 4320);
 REXCVAR_DEFINE_INT32(cherry_gfx_anisotropy, 0, "Lollipop/Graphics", "Anisotropic filtering for mipmapped textures: 0 keeps the game's own, 2, 4, 8 or 16 forces that level.").range(0, 16);
 REXCVAR_DEFINE_BOOL(cherry_gfx_fxaa, false, "Lollipop/Graphics", "Smooth jagged edges with FXAA on the final image (the HUD included).");
+REXCVAR_DEFINE_INT32(cherry_gfx_brightness, 0, "Lollipop/Graphics", "Brightness in steps of a tenth of gamma: -2 darker to +2 brighter, 0 as the game made it.").range(-3, 3);
+REXCVAR_DEFINE_INT32(cherry_gfx_sharpen, 0, "Lollipop/Graphics", "Sharpen the final picture: 0 off, 1 low, 2 high; pairs well with FXAA and render resolutions below the window's.").range(0, 2);
 REXCVAR_DEFINE_BOOL(cherry_gfx_stretch, false, "Lollipop/Graphics", "Stretch the picture to fill the window instead of keeping its shape with black bars.");
 
 namespace plume {

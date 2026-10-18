@@ -1,6 +1,6 @@
 # Options screen: the GRAPHICS page
 
-The game's own options screen (pause menu or title, OPTION) gets a second page of graphics settings, in the game's style. Press Y, LB or RB to switch between the game's options and GRAPHICS. GRAPHICS changes apply the moment a value changes. OK keeps and saves both pages; CANCEL puts both back as they were when the screen opened. DEFAULT resets only the page on screen. X shows or hides the FPS counter (`cherry_fps_counter`, saved at once) on either page.
+The game's own options screen (pause menu or title, OPTION) gets two pages of graphics settings, in the game's style. Y or RB steps GAME, GRAPHICS 1/2, GRAPHICS 2/2; LB steps back. GRAPHICS changes apply the moment a value changes. OK keeps and saves both pages; CANCEL puts both back as they were when the screen opened. DEFAULT resets only the page on screen. X shows or hides the FPS counter (`cherry_fps_counter`, saved at once) on either page.
 
 | row | choices | cvar |
 | --- | --- | --- |
@@ -11,6 +11,13 @@ The game's own options screen (pause menu or title, OPTION) gets a second page o
 | DISPLAY MODE | WINDOWED, FULLSCREEN | `fullscreen` |
 | V-SYNC | OFF, ON | `cherry_gfx_vsync` |
 | FRAME RATE | 30 FPS, 60 FPS, UNCAPPED | `target_fps` (UNCAPPED is 0: every refresh with V-SYNC on, no limit with it off) |
+| SHADOW QUALITY | DEFAULT, 256, 512, 1024 (RESTART) | `cherry_gfx_shadow_resolution` |
+| FIELD OF VIEW | 90% to 130% | `cherry_gfx_fov`: both projection hooks in `src/engine/widescreen.cpp` scale the half-angle's tangent |
+| BRIGHTNESS | -2 to +2 | `cherry_gfx_brightness`: the final blit raises the picture to 1 - 0.1 x step |
+| SHARPENING | OFF, LOW, HIGH | `cherry_gfx_sharpen`: an unsharp mask over the four neighbours in the final blit |
+| SMOOTH MENUS | OFF, ON | `cherry_ui_smooth_menus` |
+| FPS COUNTER | OFF, ON | `cherry_fps_counter` |
+| RENDERER | D3D12, VULKAN (RESTART) | `cherry_gfx_backend` (`auto` shows as D3D12) |
 
 A value outside the list (set by hand in the config) shows as the first choice. OK writes the cvars on the UI thread with `SetFlagByName`, as the F4 settings overlay does, so change callbacks such as `fullscreen`'s run. It then saves the config.
 
@@ -43,4 +50,4 @@ Menu animation is authored at 30 frames a second, so drawing faster only repeats
 
   A result is a 16-byte `GFxValue` (`+4` type: 2 bool, 3 number, 5 wide string; `+8` value) passed to the movie view's vtable slot `+200` (`SetExternalInterfaceRetVal`).
 
-The script copies `but_sub` and `sub_vol` with `duplicateMovieClip` for the seven GRAPHICS rows. It places them over the original rows, interpolating between the aiming and subtitle rows for the two slider rows. Page switches flip `_visible`. The script also wraps the focus, push, setting, cancel, default and key-down functions so each checks the page. Copied clips rerun their own frame scripts, which reset `str.text`, so an `onEnterFrame` clip rewrites the GRAPHICS texts every frame.
+The script copies `but_sub` and `sub_vol` with `duplicateMovieClip` for the seven GRAPHICS rows, which both graphics pages share: row r of page p is setting 7 x (p - 1) + r in `CherryGfx_*`. It places them over the original rows, interpolating between the aiming and subtitle rows for the two slider rows. Page switches flip `_visible`. The script also wraps the focus, push, setting, cancel, default and key-down functions so each checks the page. Copied clips rerun their own frame scripts, which reset `str.text`, so an `onEnterFrame` clip rewrites the GRAPHICS texts every frame.

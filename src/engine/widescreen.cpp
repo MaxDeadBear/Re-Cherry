@@ -10,6 +10,8 @@
 
 REXCVAR_DEFINE_INT32(cherry_gfx_ultrawide, 0, "Lollipop/Graphics", "Render wider than 16:9: 21 for 21:9, 32 for 32:9, 0 keeps the console's 16:9; takes effect at the next launch.").range(0, 32).validator([](std::string_view v) { return v == "0" || v == "21" || v == "32"; });
 
+REXCVAR_DEFINE_INT32(cherry_gfx_fov, 100, "Lollipop/Graphics", "Camera field of view as a percentage of the game's: 90 to 130.").range(70, 150);
+
 namespace {
 
 constexpr double kConsoleAspect = 16.0 / 9.0;
@@ -22,6 +24,12 @@ double UltrawideAspect() {
     case 32: return 32.0 / 9.0;
     default: return 0.0;
   }
+}
+
+// A half-angle of view widened (or narrowed) by cherry_gfx_fov, through its tangent so the picture scales evenly.
+double ScaledHalfFov(double half) {
+  const int32_t percent = REXCVAR_GET(cherry_gfx_fov);
+  return percent == 100 ? half : std::atan(std::tan(half) * double(percent) / 100.0);
 }
 
 }  // namespace
@@ -38,8 +46,10 @@ bool CherryKeepsWideScreenBudget(PPCRegister& r11) {
 }
 
 // FPerspectiveMatrix::FPerspectiveMatrix_FOVXY(this, HalfFOVX, HalfFOVY, MultFOVX, MultFOVY), which ULocalPlayer::CalcSceneView builds the gameplay projection with: a landscape view passes MultFOVX 1 and MultFOVY width / height, keeping the horizontal FOV, so a view wider than 16:9 shows the same width and loses height.
-// Past 16:9 the multipliers are rewritten to keep the console's vertical FOV and widen the horizontal one instead.
+// Past 16:9 the multipliers are rewritten to keep the console's vertical FOV and widen the horizontal one instead; cherry_gfx_fov scales both angles.
 REX_HOOK_RAW(sub_82623FB0) {
+  ctx.f1.f64 = ScaledHalfFov(ctx.f1.f64);
+  ctx.f2.f64 = ScaledHalfFov(ctx.f2.f64);
   if (ctx.f3.f64 == 1.0 && ctx.f4.f64 > kConsoleAspect + 1e-3) {
     ctx.f3.f64 = kConsoleAspect / ctx.f4.f64;
     ctx.f4.f64 = kConsoleAspect;
@@ -59,6 +69,7 @@ REX_HOOK_RAW(sub_8261FEE0) {
 REX_HOOK_RAW(sub_826240B8) {
   const uint32_t matrix = ctx.r3.u32;
   const double camera_aspect = ctx.f3.f64 != 0.0 ? ctx.f2.f64 / ctx.f3.f64 : 0.0;
+  if (g_in_scene_view) ctx.f1.f64 = ScaledHalfFov(ctx.f1.f64);
   __imp__sub_826240B8(ctx, base);
   const double screen_aspect = UltrawideAspect();
   if (!g_in_scene_view || screen_aspect <= kConsoleAspect || camera_aspect <= 0.0 || camera_aspect >= screen_aspect) return;

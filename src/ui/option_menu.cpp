@@ -35,7 +35,7 @@ constexpr uint16_t kTagEnd = 0;
 constexpr uint16_t kTagDoAction = 12;
 constexpr uint16_t kTagDefineSprite = 39;
 
-// The GRAPHICS rows in the order option_menu_graphics.as lists them, each with the cvar values its choices stand for; a row may set a second cvar with each choice too.
+// The GRAPHICS settings in the order option_menu_graphics.as lists them (its first page, then its second), each with the cvar values its choices stand for; a row may set a second cvar with each choice too.
 struct Row {
   const char* cvar;
   std::array<const char*, 7> values;
@@ -50,6 +50,13 @@ constexpr Row kRows[] = {
     {"fullscreen", {"false", "true"}},
     {"cherry_gfx_vsync", {"false", "true"}},
     {"target_fps", {"30", "60", "0"}},
+    {"cherry_gfx_shadow_resolution", {"0", "256", "512", "1024"}},
+    {"cherry_gfx_fov", {"90", "100", "110", "120", "130"}},
+    {"cherry_gfx_brightness", {"-2", "-1", "0", "1", "2"}},
+    {"cherry_gfx_sharpen", {"0", "1", "2"}},
+    {"cherry_ui_smooth_menus", {"false", "true"}},
+    {"cherry_fps_counter", {"false", "true"}},
+    {"cherry_gfx_backend", {"d3d12", "vulkan"}},
 };
 constexpr int kRowCount = int(std::size(kRows));
 
@@ -73,6 +80,8 @@ int ChoiceCount(const Row& row) {
 bool Matches(const char* cvar, const std::string& value, const char* choice) {
   const rex::cvar::FlagEntry* info = rex::cvar::GetFlagInfo(cvar);
   if (info && info->type == rex::cvar::FlagType::Boolean) return (value == "true" || value == "1") == (std::string_view(choice) == "true");
+  // cherry_gfx_backend: auto starts on D3D12.
+  if (info && info->type == rex::cvar::FlagType::String) return value == choice || (value == "auto" && std::string_view(choice) == "d3d12");
   return std::atoi(value.c_str()) == std::atoi(choice);
 }
 

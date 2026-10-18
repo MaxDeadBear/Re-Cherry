@@ -23,6 +23,8 @@
 #include "gpu/shaders/shader_registry.h"
 
 REXCVAR_DECLARE(bool, cherry_gfx_fxaa);
+REXCVAR_DECLARE(int32_t, cherry_gfx_brightness);
+REXCVAR_DECLARE(int32_t, cherry_gfx_sharpen);
 REXCVAR_DECLARE(bool, cherry_gfx_stretch);
 REXCVAR_DEFINE_INT32(cherry_debug_trace_frame, 0, "Lollipop/Debug","Log every command of this replayed frame number (as counted in the frame log): shaders, targets and each texture's address, format, size and heap slot.");
 
@@ -74,8 +76,10 @@ struct BlitConstants {
   uint32_t texture;
   uint32_t sampler;
   uint32_t fxaa;  // 1 runs FXAA over the source as it is scaled onto the swap chain
-  float padding;
+  float gamma;    // cherry_gfx_brightness as an exponent
   float source_rect[4];
+  float sharpen;  // cherry_gfx_sharpen as a strength
+  float padding[3];
 };
 
 // The viewport's depth scale, as the replay sets it: VportZScaleEnable bit 4 of GPU_VTECONTROL, else 1.
@@ -916,7 +920,10 @@ bool GraphicsSystem::BlitFrontBuffer(plume::RenderCommandList* list, const Textu
       return false;
     }
   }
-  BlitConstants constants = {texture, kBlitSampler, REXCVAR_GET(cherry_gfx_fxaa) ? 1u : 0u, 0.0f, {0.0f, 0.0f, 1.0f, 1.0f}};
+  // Each brightness step moves the gamma exponent by a tenth; sharpening is off, 0.35 or 0.7.
+  const float gamma = 1.0f - 0.1f * float(std::clamp(REXCVAR_GET(cherry_gfx_brightness), -3, 3));
+  const float sharpen = 0.35f * float(std::clamp(REXCVAR_GET(cherry_gfx_sharpen), 0, 2));
+  BlitConstants constants = {texture, kBlitSampler, REXCVAR_GET(cherry_gfx_fxaa) ? 1u : 0u, gamma, {0.0f, 0.0f, 1.0f, 1.0f}, sharpen, {}};
   const int64_t offset = ring_.Alloc(sizeof(constants), kConstantAlign);
   if (offset < 0) return false;
   std::memcpy(ring_.mapped + offset, &constants, sizeof(constants));
