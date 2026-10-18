@@ -11,6 +11,7 @@
 #include <rex/ui/keybinds.h>
 
 #include "engine/frame_rate.h"
+#include "gpu/graphics_system.h"
 
 REXCVAR_DEFINE_BOOL(cherry_fps_counter, false, "Lollipop/UI", "Show the FPS counter in the picture's top-right corner; F12 or X on the options screen toggles it.");
 REXCVAR_DECLARE(bool, cherry_gfx_stretch);
@@ -118,12 +119,14 @@ FpsOverlay::~FpsOverlay() {
 void FpsOverlay::OnDraw(ImGuiIO& io) {
   if (!REXCVAR_GET(cherry_fps_counter) || io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f) return;
 
-  // The game picture: the whole window when stretched, else the 16:9 rectangle the present letterboxes it into.
+  // The game picture: the whole window when stretched, else the rectangle of its own aspect the present letterboxes it into.
   float picture_w = io.DisplaySize.x;
   float picture_h = io.DisplaySize.y;
   if (!REXCVAR_GET(cherry_gfx_stretch)) {
-    picture_w = std::min(picture_w, picture_h * 16.0f / 9.0f);
-    picture_h = picture_w * 9.0f / 16.0f;
+    const gpu::GraphicsSystem* graphics = gpu::GraphicsSystem::instance();
+    const float aspect = graphics ? graphics->PictureAspect() : 16.0f / 9.0f;
+    picture_w = std::min(picture_w, picture_h * aspect);
+    picture_h = picture_w / aspect;
   }
   // A small card tucked into the picture's top-right corner, above the SCORE banner.
   const float unit = picture_h / 720.0f * 0.55f;

@@ -9,6 +9,7 @@ out_directory_path = "generated/default"
 includes = [
   "config/functions.toml",
   "config/d3d.toml",
+  "config/hooks/display.toml",
 ]
 
 setjmp_address  = 0x82BD89D0

@@ -15,7 +15,7 @@ Project layout:
 | `re_cherry_manifest.toml` | codegen manifest; lists every file under `config/` it includes |
 | `config/functions.toml` | function boundaries the analyzer misses and names for hooked guest functions |
 | `config/d3d.toml` | names for the guest D3D entry points the renderer hooks |
-| `config/hooks/*.toml` | midasm hooks, one file per feature area |
+| `config/hooks/*.toml` | midasm hooks, one file per feature area (`display.toml`: the ultrawide back buffer) |
 | `src/app/` | the `ReXApp` subclass: startup, paths, overlays |
 | `src/core/` | shared plumbing; midasm hook declarations go in `src/core/hooks.h` |
 | `src/engine/` | gameplay code: frame rate target, costumes, Xbox Live prompt, UE3 object access, the combo unlock |

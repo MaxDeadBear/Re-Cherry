@@ -4,6 +4,7 @@
 
 #include "engine/debug/nick_trace.h"
 #include "engine/debug/script_dump.h"
+#include "engine/shadows.h"
 #include "engine/unlock_all_combos.h"
 #include "engine/unlock_all_moves.h"
 
@@ -14,4 +15,5 @@ REX_HOOK_RAW(sub_829BD280) {
   cherry::engine::debug::TickNickTrace();
   cherry::engine::TickUnlockAllCombos();
   cherry::engine::TickUnlockAllMoves();
+  cherry::engine::ApplyShadowResolution(base);
 }

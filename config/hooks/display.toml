@@ -1,0 +1,14 @@
+# Back buffer width, in XeInitD3DDevice (0x8297F5EC); src/engine/widescreen.cpp.
+
+# The back buffer is 720 lines tall and as wide as the video mode's aspect, clamped to 900..1280; here r11 holds the clamped width before it is rounded to 8 and stored, and cherry_gfx_ultrawide replaces it.
+[[midasm_hook]]
+name = "CherryBackBufferWidth"
+address = 0x8297F684
+registers = ["r11"]
+
+# A width other than 1280 is taken for 4:3, which shrinks the shadow depth buffers to 800 and clears dword_83351EDC to save EDRAM; this beq skips that, and an ultrawide width skips it too.
+[[midasm_hook]]
+name = "CherryKeepsWideScreenBudget"
+address = 0x8297F6A0
+registers = ["r11"]
+jump_address_on_true = 0x8297F6C8

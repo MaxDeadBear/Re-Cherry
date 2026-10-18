@@ -32,7 +32,15 @@ The `Lollipop/Graphics` cvars, which the options screen's GRAPHICS page also set
 | `cherry_gfx_anisotropy` | 0 keeps each sampler's own; 2 to 16 forces that level on linearly filtered, mipmapped samplers. |
 | `cherry_gfx_fxaa` | FXAA on the front-buffer blit (`blit.hlsl`), so it covers the HUD too. |
 | `cherry_gfx_stretch` | The blit fills the window instead of letterboxing. |
-| `cherry_gfx_vsync` | Present with vsync. |
+| `cherry_gfx_vsync` | Present with vsync. Each frame is due 1/fps after the previous one's due time and takes the first vblank from half a refresh before it, so a rate the refresh does not divide (30 on 75 Hz) still averages out exactly. |
+| `cherry_gfx_ultrawide` | 21 or 32 renders 21:9 or 32:9 (next launch). `XeInitD3DDevice` sizes the back buffer 720 lines tall and at most 1280 wide; two midasm hooks (`config/hooks/display.toml`) widen it and keep the 16:9 shadow-buffer budget instead of the 4:3 one. The camera is made hor+ in `src/engine/widescreen.cpp`: gameplay's `FPerspectiveMatrix_FOVXY` keeps the console's vertical FOV, and cameras that constrain their aspect, which the viewport would otherwise stretch because it always reports a desired 16:9, get their horizontal term narrowed in the main view (scene captures keep theirs). The HUD movies anchor to the wider edges by themselves. |
+| `cherry_gfx_shadow_resolution` | 256, 512 or 1024 raise the game's character shadow maps from its ini's `MaxShadowResolution=128` (next launch; `src/engine/shadows.cpp`). A per-object shadow is projected radius x `ShadowTexelsPerPixel` clamped to that maximum and rounded down to a power of two, so the texels-per-pixel factor is scaled with it; both are re-asserted every tick. |
+
+## Pipelines and constants
+
+Draw pipelines are described by plain data (`src/gpu/draw/pipeline_state.h`), hashed, and cached in a hash map. Every pipeline built for the first time is appended to `pipelines.bin` beside the config, and at the next launch background threads build all of them while the game boots (`src/gpu/draw/pipeline_cache.cpp`), so a pipeline stalls a frame only the first time it is ever seen.
+
+Each draw copies only the float4 constants its shaders read: XenosRecomp records one past the highest register the code reads (literals the shader defines excluded; 256 when a read is relative to a0, or to aL in a shader with loops) as `constantRegisterCount`, about 20 on average. Capture byte-swaps that many and replay fills that much of each stage's 4 KB block.
 
 ## Change detection
 
