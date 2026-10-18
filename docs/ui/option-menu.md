@@ -15,7 +15,7 @@ The game's own options screen (pause menu or title, OPTION) gets two pages of gr
 | FIELD OF VIEW | 90% to 130% | `cherry_gfx_fov`: both projection hooks in `src/engine/widescreen.cpp` scale the half-angle's tangent |
 | BRIGHTNESS | -2 to +2 | `cherry_gfx_brightness`: the final blit raises the picture to 1 - 0.1 x step |
 | SHARPENING | OFF, LOW, HIGH | `cherry_gfx_sharpen`: an unsharp mask over the four neighbours in the final blit |
-| SMOOTH MENUS | OFF, ON | `cherry_ui_smooth_menus` |
+| SKIP INTRO LOGOS | OFF, ON | `skip_startup_logos`: the five logo movies at boot are started and stopped at once |
 | FPS COUNTER | OFF, ON | `cherry_fps_counter` |
 | RENDERER | D3D12, VULKAN (RESTART) | `cherry_gfx_backend` (`auto` shows as D3D12) |
 
@@ -33,15 +33,11 @@ The screen is the Scaleform movie in `OptionMenu_kis_common.xxx`: a GFX 8 file w
 
 Labels are text fields named `str` set to `$AshGame.OptionMenu.OPN_*` keys, which the translator localises, in the `$AshUIFont01` font from `gfxfontlib.swf`. Plain strings render in the same font.
 
-## Smoother menus
-
-Menu animation is authored at 30 frames a second, so drawing faster only repeats poses. `src/ui/movie_smoothing.cpp` doubles a movie's frame rate and frame counts and, between each pair of timeline frames, adds one in which every object that stays on screen as the same character moves halfway (matrix and colour transform lerped). Labels, frame scripts and `stop()`s stay on the original frames, so jumps by label and the time to reach a frame are unchanged. A movie is left alone when its scripts could count frames or it streams sound: `onEnterFrame`, `_currentframe`, an enterFrame clip event, a numeric `GotoFrame`/`GotoFrame2`, or `SoundStreamHead`. That keeps the pause rooms, main menu and other script-animated menus at 30; the options screen, title, costume menu and a few small movies are smoothed. `cherry_ui_smooth_menus` turns it off.
-
 ## The patch
 
 `src/ui/actionscript/option_menu_graphics.as` is compiled to AVM1 bytecode by `tools/ui/build_actionscript.py`, which needs JPEXS FFDec's `ffdec.jar` and Java. The output is `src/ui/actionscript/actionscript.h`, which is committed. `src/ui/option_menu.cpp` hooks two functions:
 
-- **`FGFxFileOpener::OpenFile` (`0x82932070`, `src/ui/movie_patches.cpp`).** For a movie inside a package it returns a memory file (vtable `0x8218A6E8`: data `+8`, length `+12`) over the `USwfMovie`'s `RawData`. Each GFX movie is smoothed where safe, and when it has a `DefineSprite` and `DoAction` containing `ASHUS_SetOptionMenuVibMode`, it gets the compiled script as a new `DoAction` right after that one. The copy lives in guest memory, built once and reused, and the file is pointed at it. The game's package is never modified.
+- **`FGFxFileOpener::OpenFile` (`0x82932070`, `src/ui/movie_patches.cpp`).** For a movie inside a package it returns a memory file (vtable `0x8218A6E8`: data `+8`, length `+12`) over the `USwfMovie`'s `RawData`. When a GFX movie has a `DefineSprite` and `DoAction` containing `ASHUS_SetOptionMenuVibMode`, it gets the compiled script as a new `DoAction` right after that one. The copy lives in guest memory, built once and reused, and the file is pointed at it. The game's package is never modified.
 - **`FGFxExternalInterface::Callback` (`0x829339B0`).** This is Flash's `ExternalInterface.call`. It normally runs the UnrealScript function of that name with the arguments converted (`docs/reverse-engineering/ue3-script.md`). Calls named `CherryGfx_*` are answered natively instead:
   - `Get(row)` and `Default(row)` return the choice index.
   - `Set(row, index)` applies a value at once.

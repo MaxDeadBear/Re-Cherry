@@ -9,7 +9,7 @@ var cherryHits = ["hit_vib", "hit_camud", "hit_camrl", "hit_aim", "hit_bgm", "hi
 var cherryOrigLabels = [but_vib, but_camud, but_camrl, but_aim, but_bgm, but_se, but_sub];
 var cherryOrigValues = [vib_vol, camud_vol, camrl_vol, aim_vol, bgm_vol, se_vol, sub_vol];
 // Settings in CherryGfx_* row order: the first page's seven, then the second's.
-var cherryNames = ["RESOLUTION", "ANTI-ALIASING", "TEXTURE FILTERING", "ASPECT RATIO", "DISPLAY MODE", "V-SYNC", "FRAME RATE", "SHADOW QUALITY", "FIELD OF VIEW", "BRIGHTNESS", "SHARPENING", "SMOOTH MENUS", "FPS COUNTER", "RENDERER"];
+var cherryNames = ["RESOLUTION", "ANTI-ALIASING", "TEXTURE FILTERING", "ASPECT RATIO", "DISPLAY MODE", "V-SYNC", "FRAME RATE", "SHADOW QUALITY", "FIELD OF VIEW", "BRIGHTNESS", "SHARPENING", "SKIP INTRO LOGOS", "FPS COUNTER", "RENDERER"];
 var cherryChoices = [["AUTO", "144P", "360P", "720P", "1080P", "1440P", "2160P"], ["OFF", "FXAA"], ["DEFAULT", "2X", "4X", "8X", "16X"], ["ORIGINAL", "STRETCH", "21:9 (RESTART)", "32:9 (RESTART)"], ["WINDOWED", "FULLSCREEN"], ["OFF", "ON"], ["30 FPS", "60 FPS", "UNCAPPED"], ["DEFAULT", "256 (RESTART)", "512 (RESTART)", "1024 (RESTART)"], ["90%", "100%", "110%", "120%", "130%"], ["-2", "-1", "0", "+1", "+2"], ["OFF", "LOW", "HIGH"], ["OFF", "ON"], ["OFF", "ON"], ["D3D12", "VULKAN (RESTART)"]];
 var cherrySettings = cherryNames.length;
 var cherryFpsSetting = 12;

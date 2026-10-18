@@ -54,7 +54,7 @@ constexpr Row kRows[] = {
     {"cherry_gfx_fov", {"90", "100", "110", "120", "130"}},
     {"cherry_gfx_brightness", {"-2", "-1", "0", "1", "2"}},
     {"cherry_gfx_sharpen", {"0", "1", "2"}},
-    {"cherry_ui_smooth_menus", {"false", "true"}},
+    {"skip_startup_logos", {"false", "true"}},
     {"cherry_fps_counter", {"false", "true"}},
     {"cherry_gfx_backend", {"d3d12", "vulkan"}},
 };

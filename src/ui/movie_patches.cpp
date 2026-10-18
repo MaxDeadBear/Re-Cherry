@@ -1,4 +1,4 @@
-// The game's Flash movies as they load: menus smoothed to 60 Hz where that is safe (movie_smoothing.h), and the options screen given its GRAPHICS page (option_menu.h).
+// The game's Flash movies as they load: the options screen is given its GRAPHICS pages (option_menu.h).
 
 #include <cstdint>
 #include <cstring>
@@ -17,10 +17,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 
-#include "ui/movie_smoothing.h"
 #include "ui/option_menu.h"
-
-REXCVAR_DEFINE_BOOL(cherry_ui_smooth_menus, true, "Lollipop/UI", "Play the timeline animation of menus whose scripts allow it at 60 frames a second instead of 30 (options, title, costume); applies to movies loaded after the change.");
 
 namespace {
 
@@ -37,21 +34,9 @@ std::mutex g_mutex;
 std::unordered_map<uint64_t, Patched> g_patched;
 
 Patched Patch(const uint8_t* bytes, uint32_t size) {
-  std::vector<uint8_t> movie(bytes, bytes + size);
-  bool changed = false;
-  if (REXCVAR_GET(cherry_ui_smooth_menus)) {
-    if (std::vector<uint8_t> smoothed = cherry::ui::SmoothMovieTimeline(movie); !smoothed.empty()) {
-      REXLOG_INFO("[ui] movie of {} bytes smoothed to 60 Hz ({} bytes)", size, smoothed.size());
-      movie = std::move(smoothed);
-      changed = true;
-    }
-  }
-  if (std::vector<uint8_t> page = cherry::ui::AddGraphicsPage(movie); !page.empty()) {
-    REXLOG_INFO("[ui] options screen movie given the GRAPHICS page ({} -> {} bytes)", size, page.size());
-    movie = std::move(page);
-    changed = true;
-  }
-  if (!changed) return {};
+  std::vector<uint8_t> movie = cherry::ui::AddGraphicsPage(std::vector<uint8_t>(bytes, bytes + size));
+  if (movie.empty()) return {};
+  REXLOG_INFO("[ui] options screen movie given the GRAPHICS pages ({} -> {} bytes)", size, movie.size());
   const uint32_t address = rex::system::kernel_state()->memory()->SystemHeapAlloc(uint32_t(movie.size()));
   if (!address) return {};
   std::memcpy(rex::system::kernel_state()->memory()->virtual_membase() + address, movie.data(), movie.size());
