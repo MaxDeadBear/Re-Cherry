@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 namespace plume {
@@ -146,8 +147,17 @@ class TextureCache {
   uint64_t frame_index_ = 0;
   uint32_t forced_anisotropy_ = 0;
   // address, format, width, height, tiled, endian, swizzle, signed | levels | kind
-  std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, Entry> textures_;
-  std::map<uint64_t, std::pair<uint32_t, std::unique_ptr<plume::RenderSampler>>> samplers_;
+  using TextureKey = std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>;
+  struct TextureKeyHash {
+    size_t operator()(const TextureKey& key) const {
+      const uint32_t words[8] = {std::get<0>(key), std::get<1>(key), std::get<2>(key), std::get<3>(key), std::get<4>(key), std::get<5>(key), std::get<6>(key), std::get<7>(key)};
+      uint64_t hash = 0xCBF29CE484222325ull;
+      for (uint32_t word : words) hash = (hash ^ word) * 0x100000001B3ull;
+      return size_t(hash ^ (hash >> 32));
+    }
+  };
+  std::unordered_map<TextureKey, Entry, TextureKeyHash> textures_;
+  std::unordered_map<uint64_t, std::pair<uint32_t, std::unique_ptr<plume::RenderSampler>>> samplers_;
   // address, width, height, depth: one guest address is resolved at several sizes in one frame.
   using ResolveKey = std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>;
   static ResolveKey KeyOf(const TextureFetch& fetch) { return {fetch.address(), fetch.width(), fetch.height(), fetch.depth()}; }

@@ -25,6 +25,9 @@ struct VertexShaderBinding {
 void NoteVertexShaderBinding(uint32_t object, const VertexShaderBinding& binding);
 bool LookupVertexShaderBinding(uint32_t object, VertexShaderBinding* binding);
 
+// The cache entry translated from the container with this hash, or null.
+const ShaderCacheEntry* FindShaderCacheEntry(uint64_t hash);
+
 // The cache entry a bound guest shader object was created from, or null when it missed.
 const ShaderCacheEntry* LookupShaderBinding(uint32_t object);
 

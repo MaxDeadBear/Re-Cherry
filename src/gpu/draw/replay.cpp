@@ -20,6 +20,7 @@
 #include "gpu/graphics_system.h"
 #include "gpu/shaders/builtin_shaders.h"
 #include "gpu/shaders/shader_cache.h"
+#include "gpu/shaders/shader_registry.h"
 
 REXCVAR_DECLARE(bool, cherry_gfx_fxaa);
 REXCVAR_DECLARE(bool, cherry_gfx_stretch);
@@ -271,6 +272,7 @@ bool GraphicsSystem::EnsureDrawResources(plume::RenderCommandList* list) {
   draw_failed_ = false;
   draw_ready_ = true;
   REXGPU_INFO("[gfx] draw path ready ({} texture descriptors, {} MB upload per frame)", kMaxTextures, kUploadBytes >> 20);
+  StartPipelinePrecompile();
   return true;
 }
 
@@ -278,60 +280,75 @@ float GraphicsSystem::DrawScale(const DrawRecord& record) const {
   return record.color.valid() ? TargetScale(record.color.width, record.color.height) : TargetScale(record.depth.width, record.depth.height);
 }
 
-plume::RenderPipeline* GraphicsSystem::DrawPipeline(const DrawRecord& record, uint32_t color_formats, uint32_t depth_format) {
-  plume::RenderShader* vs = ShaderModule(record.vs);
-  plume::RenderShader* ps = record.ps ? ShaderModule(record.ps) : nullptr;
-  if (!vs || (record.ps && !ps)) return nullptr;
-  const uint32_t blend_key = record.blend_control & 0x1FFF1FFF;
+PipelineState GraphicsSystem::DescribePipeline(const DrawRecord& record, uint32_t color_formats, uint32_t depth_format) const {
+  PipelineState state;
+  std::memset(&state, 0, sizeof(state));
+  state.vs_hash = record.vs->hash;
+  state.ps_hash = record.ps ? record.ps->hash : 0;
+  state.topology = uint32_t(record.topology);
+  state.blend_control = record.blend_control & 0x1FFF1FFF;
+  for (uint32_t i = 0; i < 3; ++i) state.extra_blend_controls[i] = (color_formats >> (8 * (i + 1))) & 0xFF ? record.extra_blend_controls[i] & 0x1FFF1FFF : 0;
   // Depth enable, write and function, and the whole stencil state when stencil is on.
-  const uint32_t depth_key = depth_format ? ((record.depth_control & 1) ? record.depth_control : record.depth_control & 0x76) : 0;
-  const uint32_t stencil_key = depth_format && (record.depth_control & 1) ? record.stencil_ref_mask & 0xFFFFFF : 0;
-  const uint32_t cull_key = record.mode_control & 7;
-  std::array<uint32_t, 3> extra_blend_keys = {};
-  for (uint32_t i = 0; i < 3; ++i) extra_blend_keys[i] = (color_formats >> (8 * (i + 1))) & 0xFF ? record.extra_blend_controls[i] & 0x1FFF1FFF : 0;
-  auto [found, inserted] = pipelines_.try_emplace(std::tuple{static_cast<const void*>(vs), static_cast<const void*>(ps), record.layout->key, uint32_t(record.topology), blend_key, color_formats, depth_format, depth_key, cull_key, record.color_mask, stencil_key, extra_blend_keys, depth_format ? std::bit_cast<uint32_t>(record.poly_offset_scale * DrawScale(record)) : 0u});
-  if (!inserted) return found->second.get();
-
-  std::vector<plume::RenderInputElement> elements;
-  for (size_t i = 0; i < record.layout->elements.size(); ++i) {
+  const bool stencil = depth_format && (record.depth_control & 1);
+  state.depth_control = depth_format ? (stencil ? record.depth_control : record.depth_control & 0x76) : 0;
+  state.stencil_ref_mask = stencil ? record.stencil_ref_mask & 0xFFFFFF : 0;
+  state.mode_control = record.mode_control & 7;
+  state.color_mask = record.color_mask;
+  state.color_formats = color_formats;
+  state.depth_format = depth_format;
+  // The guest's slope term is D3D's SlopeScaleDepthBias x16 in 1/16 units, so dividing gives the host's unitless slope factor; both apply in window depth, and a host pixel is 1/scale of a guest one, so the scale keeps the bias per guest pixel.
+  state.slope_scaled_depth_bias = depth_format ? record.poly_offset_scale / 16.0f * DrawScale(record) : 0.0f;
+  state.element_count = uint32_t(std::min<size_t>(record.layout->elements.size(), PipelineState::kMaxElements));
+  for (uint32_t i = 0; i < state.element_count; ++i) {
     const HostElement& e = record.layout->elements[i];
-    elements.emplace_back(DeclUsageSemantic(e.usage), e.usage_index, e.location, e.integer ? plume::RenderFormat::R32G32B32A32_UINT : plume::RenderFormat::R32G32B32A32_FLOAT, 0, uint32_t(i * 16));
+    state.elements[i] = {uint8_t(e.usage), uint8_t(e.usage_index), uint8_t(e.location), uint8_t(e.integer)};
   }
-  const plume::RenderInputSlot slot(0, record.layout->stride());
+  return state;
+}
+
+std::unique_ptr<plume::RenderPipeline> GraphicsSystem::CreatePipeline(const PipelineState& state) {
+  plume::RenderShader* vs = ShaderModule(FindShaderCacheEntry(state.vs_hash));
+  plume::RenderShader* ps = state.ps_hash ? ShaderModule(FindShaderCacheEntry(state.ps_hash)) : nullptr;
+  if (!vs || (state.ps_hash && !ps)) return nullptr;
+  std::vector<plume::RenderInputElement> elements;
+  for (uint32_t i = 0; i < state.element_count; ++i) {
+    const PipelineElement& e = state.elements[i];
+    elements.emplace_back(DeclUsageSemantic(e.usage), e.usage_index, e.location, e.integer ? plume::RenderFormat::R32G32B32A32_UINT : plume::RenderFormat::R32G32B32A32_FLOAT, 0, i * 16);
+  }
+  const plume::RenderInputSlot slot(0, state.element_count * 16);
   const plume::RenderSpecConstant spec(0, kSpecConstantAlphaTest);
 
   plume::RenderGraphicsPipelineDesc desc;
   desc.pipelineLayout = draw_layout_.get();
   desc.vertexShader = vs;
   desc.pixelShader = ps;
-  desc.primitiveTopology = HostTopology(record.topology);
+  desc.primitiveTopology = HostTopology(DrawTopology(state.topology));
   // ModeControl: cull front bit 0, back bit 1, clockwise front bit 2. -fvk-invert-y keeps a SPIR-V triangle where D3D puts it, so neither backend flips the winding (Kameo measured this).
-  const bool cull_front = record.mode_control & 1;
-  const bool cull_back = record.mode_control & 2;
+  const bool cull_front = state.mode_control & 1;
+  const bool cull_back = state.mode_control & 2;
   desc.cullMode = cull_front == cull_back ? plume::RenderCullMode::NONE : cull_front ? plume::RenderCullMode::FRONT : plume::RenderCullMode::BACK;
-  desc.frontFace = ((record.mode_control >> 2) & 1) ? plume::RenderFrontFace::CLOCKWISE : plume::RenderFrontFace::COUNTER_CLOCKWISE;
-  for (uint32_t i = 0; i < 4 && ((color_formats >> (8 * i)) & 0xFF); ++i) {
-    desc.renderTargetFormat[i] = plume::RenderFormat((color_formats >> (8 * i)) & 0xFF);
-    desc.renderTargetBlend[i] = XenosBlendDesc(i == 0 ? record.blend_control : record.extra_blend_controls[i - 1]);
-    desc.renderTargetBlend[i].renderTargetWriteMask = uint8_t((record.color_mask >> (4 * i)) & 0xF);
+  desc.frontFace = ((state.mode_control >> 2) & 1) ? plume::RenderFrontFace::CLOCKWISE : plume::RenderFrontFace::COUNTER_CLOCKWISE;
+  for (uint32_t i = 0; i < 4 && ((state.color_formats >> (8 * i)) & 0xFF); ++i) {
+    desc.renderTargetFormat[i] = plume::RenderFormat((state.color_formats >> (8 * i)) & 0xFF);
+    desc.renderTargetBlend[i] = XenosBlendDesc(i == 0 ? state.blend_control : state.extra_blend_controls[i - 1]);
+    desc.renderTargetBlend[i].renderTargetWriteMask = uint8_t((state.color_mask >> (4 * i)) & 0xF);
     desc.renderTargetCount = i + 1;
   }
-  if (depth_format) {
-    desc.depthTargetFormat = plume::RenderFormat(depth_format);
+  if (state.depth_format) {
+    desc.depthTargetFormat = plume::RenderFormat(state.depth_format);
     // DepthControl: z enable bit 1, z write bit 2, function bits 4..6.
-    desc.depthEnabled = (record.depth_control >> 1) & 1;
-    desc.depthWriteEnabled = desc.depthEnabled && ((record.depth_control >> 2) & 1);
-    desc.depthFunction = XenosCompare(record.depth_control >> 4);
-    // The guest's slope term is D3D's SlopeScaleDepthBias x16 in 1/16 units, so dividing gives the host's unitless slope factor; both apply in window depth, and a host pixel is 1/scale of a guest one, so the scale keeps the bias per guest pixel.
-    desc.slopeScaledDepthBias = record.poly_offset_scale / 16.0f * DrawScale(record);
+    desc.depthEnabled = (state.depth_control >> 1) & 1;
+    desc.depthWriteEnabled = desc.depthEnabled && ((state.depth_control >> 2) & 1);
+    desc.depthFunction = XenosCompare(state.depth_control >> 4);
+    desc.slopeScaledDepthBias = state.slope_scaled_depth_bias;
     // DepthControl: stencil enable bit 0, two-sided bit 7, front face from bit 8, back face from bit 20.
-    if (record.depth_control & 1) {
+    if (state.depth_control & 1) {
       desc.stencilEnabled = true;
-      desc.stencilReference = record.stencil_ref_mask & 0xFF;
-      desc.stencilReadMask = (record.stencil_ref_mask >> 8) & 0xFF;
-      desc.stencilWriteMask = (record.stencil_ref_mask >> 16) & 0xFF;
-      desc.stencilFrontFace = XenosStencilFace(record.depth_control, 8);
-      desc.stencilBackFace = (record.depth_control & 0x80) ? XenosStencilFace(record.depth_control, 20) : desc.stencilFrontFace;
+      desc.stencilReference = state.stencil_ref_mask & 0xFF;
+      desc.stencilReadMask = (state.stencil_ref_mask >> 8) & 0xFF;
+      desc.stencilWriteMask = (state.stencil_ref_mask >> 16) & 0xFF;
+      desc.stencilFrontFace = XenosStencilFace(state.depth_control, 8);
+      desc.stencilBackFace = (state.depth_control & 0x80) ? XenosStencilFace(state.depth_control, 20) : desc.stencilFrontFace;
     }
   }
   desc.inputSlots = &slot;
@@ -342,18 +359,33 @@ plume::RenderPipeline* GraphicsSystem::DrawPipeline(const DrawRecord& record, ui
     desc.specConstants = &spec;
     desc.specConstantsCount = 1;
   }
-  found->second = device_->createGraphicsPipeline(desc);
-  debug::AddFrameCount(debug::FrameCount::Pipelines, 1);
+  std::unique_ptr<plume::RenderPipeline> pipeline = device_->createGraphicsPipeline(desc);
 #ifdef _WIN32
-  if (found->second && !using_vulkan_) {
-    auto* d3d12 = static_cast<plume::D3D12GraphicsPipeline*>(found->second.get());
+  if (pipeline && !using_vulkan_) {
+    auto* d3d12 = static_cast<plume::D3D12GraphicsPipeline*>(pipeline.get());
     // plume returns a pipeline even when CreateGraphicsPipelineState fails, and setPipeline then crashes on its null PSO.
-    if (!d3d12->d3d) found->second.reset();
+    if (!d3d12->d3d) pipeline.reset();
     // plume's D3D12 backend applies stencilRef in setPipeline but never copies it from the desc.
     else d3d12->stencilRef = desc.stencilReference;
   }
 #endif
-  if (!found->second && pipeline_failures_++ < 8) REXGPU_WARN("[gfx] pipeline creation failed for VS {:016X} / PS {:016X}: colour formats {:08X}, depth format {}, {} inputs, topology {}, depth control {:08X}", record.vs->hash, record.ps ? record.ps->hash : 0, color_formats, depth_format, elements.size(), uint32_t(record.topology), record.depth_control);
+  return pipeline;
+}
+
+plume::RenderPipeline* GraphicsSystem::DrawPipeline(const DrawRecord& record, uint32_t color_formats, uint32_t depth_format) {
+  const PipelineState state = DescribePipeline(record, color_formats, depth_format);
+  const uint64_t key = PipelineKey(state);
+  {
+    std::lock_guard<std::mutex> lock(pipeline_mutex_);
+    if (auto found = pipelines_.find(key); found != pipelines_.end()) return found->second.get();
+  }
+  std::unique_ptr<plume::RenderPipeline> pipeline = CreatePipeline(state);
+  debug::AddFrameCount(debug::FrameCount::Pipelines, 1);
+  if (!pipeline && pipeline_failures_++ < 8) REXGPU_WARN("[gfx] pipeline creation failed for VS {:016X} / PS {:016X}: colour formats {:08X}, depth format {}, {} inputs, topology {}, depth control {:08X}", state.vs_hash, state.ps_hash, color_formats, depth_format, state.element_count, state.topology, state.depth_control);
+  else if (pipeline) RecordPipeline(state);
+  std::lock_guard<std::mutex> lock(pipeline_mutex_);
+  // The precompile thread may have built the same one meanwhile; either serves.
+  auto [found, inserted] = pipelines_.try_emplace(key, std::move(pipeline));
   return found->second.get();
 }
 
@@ -492,7 +524,7 @@ void GraphicsSystem::ReplayFrame(plume::RenderCommandList* list, DrawFrame& fram
         const uint32_t stride = r.layout->stride() / 4;
         for (uint32_t v = 0; vertices && v < std::min(r.vertex_count, 3u); ++v) REXGPU_INFO("[trace]     v{} element 0 ({}, {}, {}, {})", v, vertices[v * stride], vertices[v * stride + 1], vertices[v * stride + 2], vertices[v * stride + 3]);
         const float* vs_constants = reinterpret_cast<const float*>(frame.arena.data() + r.constants);
-        for (uint32_t c = 6; c < 10; ++c) REXGPU_INFO("[trace]     c{} ({}, {}, {}, {})", c, vs_constants[4 * c], vs_constants[4 * c + 1], vs_constants[4 * c + 2], vs_constants[4 * c + 3]);
+        for (uint32_t c = 6; c < std::min(10u, VertexConstantRegisters(r)); ++c) REXGPU_INFO("[trace]     c{} ({}, {}, {}, {})", c, vs_constants[4 * c], vs_constants[4 * c + 1], vs_constants[4 * c + 2], vs_constants[4 * c + 3]);
       }
     }
   }
@@ -665,8 +697,13 @@ void GraphicsSystem::ReplayFrame(plume::RenderCommandList* list, DrawFrame& fram
     std::memcpy(shared.vertex_texture_2d, record.texture_index + kPixelSamplers, sizeof(shared.vertex_texture_2d));
     std::memcpy(shared.vertex_sampler, record.sampler_index + kPixelSamplers, sizeof(shared.vertex_sampler));
     const uint8_t* arena = frame.arena.data();
-    const int64_t vs = stage(arena + record.constants, kConstantBlockBytes, kConstantAlign);
-    const int64_t ps = stage(arena + record.constants + kConstantBlockBytes, kConstantBlockBytes, kConstantAlign);
+    // Each stage's block is bound whole, but only the registers its shader reads are filled.
+    const uint64_t vs_bytes = uint64_t(std::min(VertexConstantRegisters(record), 256u)) * 16;
+    const uint64_t ps_bytes = uint64_t(std::min(PixelConstantRegisters(record), 256u)) * 16;
+    const int64_t vs = stage(nullptr, kConstantBlockBytes, kConstantAlign);
+    if (vs >= 0) std::memcpy(ring_.mapped + vs, arena + record.constants, vs_bytes);
+    const int64_t ps = stage(nullptr, kConstantBlockBytes, kConstantAlign);
+    if (ps >= 0) std::memcpy(ring_.mapped + ps, arena + record.constants + vs_bytes, ps_bytes);
     const int64_t sh = stage(&shared, sizeof(shared), kConstantAlign);
     stage(nullptr, kSharedBlockBytes - sizeof(shared), 1);
     const HostGeometry* geometry = record.geometry.get();
@@ -886,6 +923,7 @@ bool GraphicsSystem::BlitFrontBuffer(plume::RenderCommandList* list, const Textu
 
   // Scaled evenly and centred, so a window of another shape gets bars rather than a stretch, unless stretching is asked for.
   const bool stretch = REXCVAR_GET(cherry_gfx_stretch);
+  picture_aspect_.store(float(front_buffer.width()) / float(front_buffer.height()), std::memory_order_relaxed);
   const float scale = std::min(float(width) / float(front_buffer.width()), float(height) / float(front_buffer.height()));
   const float w = stretch ? float(width) : float(front_buffer.width()) * scale;
   const float h = stretch ? float(height) : float(front_buffer.height()) * scale;

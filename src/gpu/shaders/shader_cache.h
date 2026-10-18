@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-// The initialiser order: { hash, dxilOffset, dxilSize, spirvOffset, spirvSize, specConstantsMask, textureDimensionMask }, sorted by hash; tools/shaders/build_shader_cache.py writes it.
+// The initialiser order: { hash, dxilOffset, dxilSize, spirvOffset, spirvSize, specConstantsMask, textureDimensionMask, constantRegisterCount }, sorted by hash; tools/shaders/build_shader_cache.py writes it.
 struct ShaderCacheEntry {
   uint64_t hash;
   uint32_t dxilOffset;
@@ -14,6 +14,8 @@ struct ShaderCacheEntry {
   uint32_t specConstantsMask;  // also kShaderIndexedVertexFetch
   // Two bits per fetch-constant slot below 16: 0 = 2D, 1 = 3D, 2 = cube.
   uint32_t textureDimensionMask;
+  // One past the highest float4 constant register the shader reads (256 when it indexes them), so draws copy only that many.
+  uint32_t constantRegisterCount = 256;
 };
 
 // SPEC_CONSTANT_INDEXED_VERTEX_FETCH in the patched shader_common.h: the vertex shader fetches at an index it computed, so its draw's vertices go to the vertex atlas.

@@ -288,13 +288,15 @@ bool CaptureState(uint8_t* base, uint32_t device, DrawRecord& record, const Decl
   }
   record.layout = &(*decl)->layout;
 
-  record.constants = g_frame.Alloc(2 * 4096);
-  // Byte-swapped through plain pointers, which the compiler vectorises; REX_LOAD_U32's volatile loads go a word at a time.
+  // Only the registers each shader reads, byte-swapped through plain pointers, which the compiler vectorises; REX_LOAD_U32's volatile loads go a word at a time.
+  const uint32_t vs_words = std::min(VertexConstantRegisters(record), 256u) * 4;
+  const uint32_t ps_words = std::min(PixelConstantRegisters(record), 256u) * 4;
+  record.constants = g_frame.Alloc(size_t(vs_words + ps_words) * 4);
   uint32_t* constants = reinterpret_cast<uint32_t*>(g_frame.arena.data() + record.constants);
   const uint32_t* vertex_constants = reinterpret_cast<const uint32_t*>(GuestVirtual(base, device + dev::kVertexShaderConstants));
   const uint32_t* pixel_constants = reinterpret_cast<const uint32_t*>(GuestVirtual(base, device + dev::kPixelShaderConstants));
-  for (uint32_t i = 0; i < 1024; ++i) constants[i] = std::byteswap(vertex_constants[i]);
-  for (uint32_t i = 0; i < 1024; ++i) constants[1024 + i] = std::byteswap(pixel_constants[i]);
+  for (uint32_t i = 0; i < vs_words; ++i) constants[i] = std::byteswap(vertex_constants[i]);
+  for (uint32_t i = 0; i < ps_words; ++i) constants[vs_words + i] = std::byteswap(pixel_constants[i]);
   // Vertex bools b0..b15 are bits 0..15; pixel bools (b128 + N in the microcode) are bits 16..31.
   record.booleans = (REX_LOAD_U32(device + dev::kBoolConstants) & 0xFFFF) | ((REX_LOAD_U32(device + dev::kBoolConstants + 16) & 0xFFFF) << 16);
   for (uint32_t s = 0; s < kSamplerSlots; ++s) {

@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <functional>
 #include <array>
+#include <atomic>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <condition_variable>
@@ -13,10 +15,12 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <rex/system/interfaces/graphics.h>
 
+#include "gpu/draw/pipeline_state.h"
 #include "gpu/textures/texture_cache.h"
 #include "gpu/upload_ring.h"
 
@@ -92,6 +96,8 @@ class GraphicsSystem final : public rex::system::IGraphicsSystem {
 
   // The active system, for the hooks; null before SetupPresentation.
   static GraphicsSystem* instance();
+  // The width over the height of the picture the game presents: 16:9 on the console, wider with cherry_gfx_ultrawide.
+  float PictureAspect() const { return picture_aspect_.load(std::memory_order_relaxed); }
 
   // The ImGui overlays, built on the UI thread (gpu/ui/imgui_drawer.cpp) and drawn over each presented image by the render thread (gpu/ui/ui_pass.cpp).
   struct UiDraw {
@@ -113,6 +119,8 @@ class GraphicsSystem final : public rex::system::IGraphicsSystem {
   void SubmitUi(UiFrame&& frame);
   // Called on the render thread after every present to ask for the next overlay frame; it must not block.
   void SetUiFrameRequest(std::function<void()> request);
+  // Where pipelines.bin lives; set once at startup.
+  void SetPipelineCachePath(const std::filesystem::path& path);
 
  private:
   struct FrameSlot {
@@ -153,6 +161,15 @@ class GraphicsSystem final : public rex::system::IGraphicsSystem {
   void LogDeviceRemoved();
   // `color_formats` holds one byte per bound render target, 0 past the last.
   plume::RenderPipeline* DrawPipeline(const DrawRecord& record, uint32_t color_formats, uint32_t depth_format);
+  PipelineState DescribePipeline(const DrawRecord& record, uint32_t color_formats, uint32_t depth_format) const;
+  // Thread-safe: the precompile threads call it as the render thread does.
+  std::unique_ptr<plume::RenderPipeline> CreatePipeline(const PipelineState& state);
+  static uint64_t PipelineKey(const PipelineState& state);
+  // Appends a pipeline built for the first time to pipelines.bin.
+  void RecordPipeline(const PipelineState& state);
+  // Once the draw path is up and the path is known, builds every pipeline pipelines.bin lists on background threads.
+  void StartPipelinePrecompile();
+  void StopPipelinePrecompile();
   // Draws the resolved front buffer onto the bound swap chain image, letterboxed to its aspect; false when the guest never resolved one.
   bool BlitFrontBuffer(plume::RenderCommandList* list, const TextureFetch& front_buffer, uint32_t width, uint32_t height);
 
@@ -240,8 +257,16 @@ class GraphicsSystem final : public rex::system::IGraphicsSystem {
   // One upload buffer per frame in flight, holding that frame's vertices, indices and constant blocks.
   std::unique_ptr<plume::RenderBuffer> upload_[kFramesInFlight];
   uint8_t* upload_mapped_[kFramesInFlight] = {};
-  // vs, ps, layout key, topology, blend control, colour format, depth format, depth control, cull, colour mask, stencil ref/mask
-  std::map<std::tuple<const void*, const void*, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, std::array<uint32_t, 3>, uint32_t>, std::unique_ptr<plume::RenderPipeline>> pipelines_;
+  // Draw pipelines by PipelineKey; the precompile threads add to it too.
+  std::atomic<float> picture_aspect_{16.0f / 9.0f};
+  std::mutex pipeline_mutex_;
+  std::unordered_map<uint64_t, std::unique_ptr<plume::RenderPipeline>> pipelines_;
+  // pipelines.bin: every pipeline built, so the next launch builds them ahead (src/gpu/draw/pipeline_cache.cpp); guarded by pipeline_mutex_.
+  std::filesystem::path pipeline_cache_path_;
+  std::unordered_set<uint64_t> recorded_pipelines_;
+  bool precompile_started_ = false;
+  std::atomic<bool> precompile_stop_{false};
+  std::vector<std::thread> precompile_threads_;
   std::map<std::tuple<uint32_t, uint32_t, uint32_t, bool>, HostTarget> targets_;
   std::map<std::pair<ColorTargets, const HostTarget*>, std::unique_ptr<plume::RenderFramebuffer>> target_framebuffers_;
   std::unique_ptr<plume::RenderShader> blit_vs_;

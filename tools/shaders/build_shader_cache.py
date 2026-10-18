@@ -71,8 +71,10 @@ def read_meta(path):
         fields = f.read().split()
     h, dxil_size, spirv_size, spec = fields[:4]
     dims = fields[4] if len(fields) > 4 else "0"
+    # One past the highest float4 constant the code reads; older metadata has none, so the host copies all 256.
+    regs = fields[5] if len(fields) > 5 else "256"
     return {"hash": int(h, 16), "dxil_size": int(dxil_size), "spirv_size": int(spirv_size),
-            "spec": int(spec), "dims": int(dims)}
+            "spec": int(spec), "dims": int(dims), "regs": int(regs)}
 
 
 def cached_entry(cache_dir, key):
@@ -282,7 +284,7 @@ def main():
             if e["spirv_size"]:
                 with open(e["spirv"], "rb") as f:
                     spirv_blob += f.read()
-            rows.append((e["hash"], d_off, e["dxil_size"], s_off, e["spirv_size"], e["spec"], e["dims"]))
+            rows.append((e["hash"], d_off, e["dxil_size"], s_off, e["spirv_size"], e["spec"], e["dims"], e["regs"]))
 
         dxil_c, spirv_c = compress(dxil_blob), compress(spirv_blob)
 
@@ -295,7 +297,7 @@ def main():
                     " equals its decompressed size. SPIR-V is smol-v per entry.\n\n")
             f.write("ShaderCacheEntry g_shaderCacheEntries[] = {\n")
             for r in rows:
-                f.write("\t{{ 0x{:016X}, {}, {}, {}, {}, {}, {} }},\n".format(*r))
+                f.write("\t{{ 0x{:016X}, {}, {}, {}, {}, {}, {}, {} }},\n".format(*r))
             if not rows:
                 f.write("\t{},\n")
             f.write("};\n\n")

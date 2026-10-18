@@ -230,6 +230,7 @@ void GraphicsSystem::Shutdown() {
   capture_framebuffer_.reset();
   capture_target_.reset();
   capture_readback_.reset();
+  StopPipelinePrecompile();
   pipelines_.clear();
   for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
     if (upload_mapped_[slot]) upload_[slot]->unmap();

@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 
+#include "gpu/shaders/shader_cache.h"
 #include "gpu/textures/texture_cache.h"
 
 struct ShaderCacheEntry;
@@ -81,7 +82,7 @@ struct DrawRecord {
   uint32_t vertex_count = 0;
   uint32_t indices = 0;
   uint32_t index_count = 0;
-  uint32_t constants = 0;  // 256 float4 VS, then 256 float4 PS, little-endian
+  uint32_t constants = 0;  // VertexConstantRegisters float4s, then PixelConstantRegisters, little-endian
   uint32_t booleans = 0;
   uint32_t blend_control = 0;
   uint32_t extra_blend_controls[3] = {};
@@ -138,6 +139,10 @@ struct DrawFrame {
   uint32_t Alloc(size_t bytes);
   void Clear();
 };
+
+// The float4 constant registers a draw's arena block holds per stage: as many as its shader reads.
+inline uint32_t VertexConstantRegisters(const DrawRecord& record) { return record.vs ? record.vs->constantRegisterCount : 0; }
+inline uint32_t PixelConstantRegisters(const DrawRecord& record) { return record.ps ? record.ps->constantRegisterCount : 0; }
 
 // Called from the draw hooks: `start` and `count` are vertices for a non-indexed draw, indices into the bound index buffer otherwise.
 void CaptureDraw(uint32_t device, uint32_t primitive_type, uint32_t start, uint32_t count, bool indexed);

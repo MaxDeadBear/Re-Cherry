@@ -47,7 +47,7 @@ std::vector<uint8_t> g_dxil;
 std::vector<uint8_t> g_spirv_smolv;
 std::unordered_map<const ShaderCacheEntry*, std::vector<uint8_t>> g_spirv;
 
-const ShaderCacheEntry* FindShaderCacheEntry(uint64_t hash) {
+const ShaderCacheEntry* FindEntry(uint64_t hash) {
   const ShaderCacheEntry* begin = g_shaderCacheEntries;
   const ShaderCacheEntry* end = g_shaderCacheEntries + g_shaderCacheEntryCount;
   const ShaderCacheEntry* found = std::lower_bound(begin, end, hash, [](const ShaderCacheEntry& lhs, uint64_t rhs) { return lhs.hash < rhs; });
@@ -108,7 +108,7 @@ void RegisterShader(uint8_t* base, uint32_t virtual_part, uint32_t physical_part
   std::memcpy(bytes.data() + virtual_size, base + physical_part, total - virtual_size);
   const uint8_t* data = bytes.data();
   const uint64_t hash = XXH3_64bits(data, total);
-  const ShaderCacheEntry* entry = FindShaderCacheEntry(hash);
+  const ShaderCacheEntry* entry = FindEntry(hash);
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_bindings.insert_or_assign(object, entry);
@@ -163,6 +163,10 @@ std::span<const uint8_t> ShaderSpirv(const ShaderCacheEntry* entry) {
     if (!smolv::Decode(smolv, entry->spirvSize, found->second.data(), found->second.size())) found->second.clear();
   }
   return found->second;
+}
+
+const ShaderCacheEntry* FindShaderCacheEntry(uint64_t hash) {
+  return FindEntry(hash);
 }
 
 }  // namespace cherry::gpu
